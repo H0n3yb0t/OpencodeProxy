@@ -171,7 +171,7 @@ func (s *Store) ListKeys(ctx context.Context) ([]Key, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var result []Key
+	result := make([]Key, 0)
 	for rows.Next() {
 		key, err := scanKey(rows)
 		if err != nil {
@@ -396,7 +396,7 @@ func (s *Store) RecentRequests(ctx context.Context, limit int, keyID int64, mode
 		return nil, err
 	}
 	defer rows.Close()
-	var out []RequestRecord
+	out := make([]RequestRecord, 0)
 	for rows.Next() {
 		var r RequestRecord
 		var started string
@@ -414,7 +414,11 @@ func (s *Store) RecentRequests(ctx context.Context, limit int, keyID int64, mode
 }
 
 func (s *Store) Dashboard(ctx context.Context, since time.Time) (Dashboard, error) {
-	d := Dashboard{KeyCounts: map[string]int{}}
+	d := Dashboard{
+		KeyCounts: map[string]int{},
+		Timeline:  make([]TimelinePoint, 0),
+		ByKey:     make([]KeyAggregate, 0),
+	}
 	keys, err := s.ListKeys(ctx)
 	if err != nil {
 		return d, err

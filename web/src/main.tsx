@@ -82,6 +82,21 @@ type SetupSecrets = {
   proxy_token: string;
   recovery_key: string;
 };
+type KeyImportResult = {
+  line: number;
+  name?: string;
+  fingerprint?: string;
+  status: "imported" | "duplicate" | "failed";
+  error?: string;
+  test?: { ok?: boolean; stage?: string; message?: string };
+};
+type KeyImportResponse = {
+  total: number;
+  imported: number;
+  duplicates: number;
+  failed: number;
+  results: KeyImportResult[];
+};
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, {
@@ -222,7 +237,8 @@ function Setup({ onComplete }: { onComplete: () => void }) {
         <p className="eyebrow">INITIALIZATION COMPLETE</p>
         <h1>请保存一次性凭据</h1>
         <p className="muted setup-copy">
-          管理员密码和代理 token 只在此页面显示一次。恢复密钥用于数据卷备份恢复。
+          管理员密码和代理 token
+          只在此页面显示一次。恢复密钥用于数据卷备份恢复。
         </p>
         <div className="secret-list">
           {[
@@ -233,16 +249,12 @@ function Setup({ onComplete }: { onComplete: () => void }) {
             <div className="secret-row" key={label}>
               <span>{label}</span>
               <code>{value}</code>
-              <button onClick={() => copyText(value)}>
-                复制
-              </button>
+              <button onClick={() => copyText(value)}>复制</button>
             </div>
           ))}
         </div>
         <div className="setup-actions">
-          <button onClick={() => copyText(exportText)}>
-            复制全部
-          </button>
+          <button onClick={() => copyText(exportText)}>复制全部</button>
           <button onClick={download}>下载凭据文件</button>
         </div>
         <label className="check setup-check">
@@ -430,7 +442,13 @@ function Dashboard({ refresh }: { refresh: number }) {
   const load = useCallback(
     () =>
       api<DashboardData>(`/api/admin/dashboard?window=${windowName}`).then(
-        setData,
+        (value) =>
+          setData({
+            ...value,
+            key_counts: value.key_counts || {},
+            timeline: value.timeline || [],
+            by_key: value.by_key || [],
+          }),
       ),
     [windowName],
   );
@@ -534,7 +552,7 @@ function Dashboard({ refresh }: { refresh: number }) {
             输出
           </div>
         </div>
-        <TokenChart points={data.timeline} />
+        <TokenChart points={data.timeline || []} />
       </section>
       <section className="panel">
         <div className="panel-head">
@@ -545,7 +563,7 @@ function Dashboard({ refresh }: { refresh: number }) {
           <span className="muted">当前窗口</span>
         </div>
         <div className="key-performance">
-          {data.by_key.map((k) => {
+          {(data.by_key || []).map((k) => {
             const input = k.input_uncached + k.cache_read + k.cache_write;
             const ratio = input ? (k.cache_read / input) * 100 : 0;
             return (
@@ -668,14 +686,7 @@ function Keys({ refresh }: { refresh: number }) {
           {showAdd ? "取消" : "添加 key"}
         </button>
       </PageHead>
-      {showAdd && (
-        <AddKey
-          onDone={() => {
-            setShowAdd(false);
-            load();
-          }}
-        />
-      )}
+      {showAdd && <AddKey onImported={load} />}
       {error && <p className="banner-error">{error}</p>}
       <section className="keys-list">
         {keys.length === 0 && (
@@ -795,23 +806,39 @@ function statusTone(k: KeyItem) {
   if (k.pool_role === "active") return "good";
   return "idle";
 }
-function AddKey({ onDone }: { onDone: () => void }) {
+function AddKey({ onImported }: { onImported: () => void | Promise<void> }) {
   const [name, setName] = useState("");
-  const [key, setKey] = useState("");
+  const [keyText, setKeyText] = useState("");
   const [priority, setPriority] = useState(100);
+  const [validate, setValidate] = useState(true);
   const [probe, setProbe] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [result, setResult] = useState<KeyImportResponse | null>(null);
+  const lines = keyText
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const uniqueCount = new Set(lines).size;
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError("");
+    setResult(null);
     try {
-      await api("/api/admin/keys", {
+      const response = await api<KeyImportResponse>("/api/admin/keys/import", {
         method: "POST",
-        body: JSON.stringify({ name, key, priority, test_inference: probe }),
+        body: JSON.stringify({
+          keys: lines,
+          name_prefix: name,
+          priority,
+          validate,
+          test_inference: validate && probe,
+        }),
       });
-      onDone();
+      setResult(response);
+      if (response.failed === 0) setKeyText("");
+      await onImported();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -822,15 +849,15 @@ function AddKey({ onDone }: { onDone: () => void }) {
     <form className="add-key" onSubmit={submit}>
       <div>
         <label>
-          名称
+          名称前缀（可选）
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="例如 HK Go 01"
+            placeholder="例如 HK Go；批量导入时自动追加序号"
           />
         </label>
         <label>
-          优先级
+          起始优先级
           <input
             type="number"
             value={priority}
@@ -839,26 +866,78 @@ function AddKey({ onDone }: { onDone: () => void }) {
         </label>
       </div>
       <label>
-        OpenCode Go API key
-        <input
+        OpenCode Go API key（每行一个，最多 100 个）
+        <textarea
           required
-          type="password"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          placeholder="粘贴后将加密保存"
+          rows={7}
+          spellCheck={false}
+          autoComplete="off"
+          value={keyText}
+          onChange={(e) => setKeyText(e.target.value)}
+          placeholder={"opencode-key-1\nopencode-key-2\nopencode-key-3"}
         />
+        <small className="import-count">
+          已识别 {lines.length} 行 · {uniqueCount} 个不同 key
+        </small>
       </label>
       <label className="check">
         <input
           type="checkbox"
+          checked={validate}
+          onChange={(e) => {
+            setValidate(e.target.checked);
+            if (!e.target.checked) setProbe(false);
+          }}
+        />
+        导入后逐个验证鉴权
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          disabled={!validate}
           checked={probe}
           onChange={(e) => setProbe(e.target.checked)}
         />
-        添加后执行一次最小推理探测
+        验证时执行一次最小推理探测
       </label>
       {error && <p className="form-error">{error}</p>}
-      <button className="primary" disabled={busy}>
-        {busy ? "正在加密并验证…" : "保存 key"}
+      {result && (
+        <section className="import-result">
+          <strong>
+            已导入 {result.imported} / {result.total}
+          </strong>
+          <span>
+            {result.duplicates} 个重复 · {result.failed} 个失败
+          </span>
+          <div>
+            {result.results.map((item) => (
+              <p className={item.status} key={`${item.line}-${item.status}`}>
+                <b>第 {item.line} 行</b>
+                <code>{item.fingerprint || "—"}</code>
+                <span>
+                  {item.status === "imported"
+                    ? item.test?.ok === false
+                      ? `已保存，验证失败：${item.test.message || item.test.stage || "未知错误"}`
+                      : item.test
+                        ? "已保存并通过验证"
+                        : "已保存"
+                    : item.status === "duplicate"
+                      ? item.error === "key already exists"
+                        ? "已存在于密钥池"
+                        : "本次导入中重复"
+                      : item.error || "导入失败"}
+                </span>
+              </p>
+            ))}
+          </div>
+        </section>
+      )}
+      <button className="primary" disabled={busy || lines.length === 0}>
+        {busy
+          ? `正在导入 ${lines.length} 个 key…`
+          : lines.length
+            ? `导入 ${lines.length} 个 key`
+            : "导入 key"}
       </button>
     </form>
   );
@@ -1117,11 +1196,7 @@ function SettingsPage() {
                 <strong>新代理 Token（仅显示一次）</strong>
                 <code>{rotatedToken}</code>
               </div>
-              <button
-                onClick={() => copyText(rotatedToken)}
-              >
-                复制
-              </button>
+              <button onClick={() => copyText(rotatedToken)}>复制</button>
             </div>
           )}
         </article>

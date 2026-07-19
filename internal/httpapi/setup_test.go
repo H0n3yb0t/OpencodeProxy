@@ -87,6 +87,27 @@ func TestWebSetupPersistsAndRotatesProxyToken(t *testing.T) {
 		t.Fatalf("me=%d %s", me.Code, me.Body.String())
 	}
 
+	// Empty collections are encoded as JSON arrays rather than null so a fresh
+	// installation can render the dashboard before its first key or request.
+	for path, fields := range map[string][]string{
+		"/api/admin/dashboard?window=5h": {`"timeline":[]`, `"by_key":[]`},
+		"/api/admin/keys":                {`"keys":[]`},
+		"/api/admin/requests?limit=100":  {`"requests":[]`},
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(cookies[0])
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s=%d %s", path, response.Code, response.Body.String())
+		}
+		for _, field := range fields {
+			if !bytes.Contains(response.Body.Bytes(), []byte(field)) {
+				t.Fatalf("GET %s did not encode empty array %s: %s", path, field, response.Body.String())
+			}
+		}
+	}
+
 	rotateRequest := httptest.NewRequest(http.MethodPost, "/api/admin/proxy-token/rotate", nil)
 	rotateRequest.AddCookie(cookies[0])
 	rotatedResponse := httptest.NewRecorder()
@@ -128,5 +149,45 @@ func TestWebSetupPersistsAndRotatesProxyToken(t *testing.T) {
 	restarted.ServeHTTP(loginResponse, loginRequest)
 	if loginResponse.Code != http.StatusOK {
 		t.Fatalf("restart login=%d %s", loginResponse.Code, loginResponse.Body.String())
+	}
+	loginCookies := loginResponse.Result().Cookies()
+	if len(loginCookies) == 0 {
+		t.Fatal("login did not create a session")
+	}
+
+	batchBody := []byte(`{"keys":["batch-secret-one","batch-secret-two","batch-secret-one"],"name_prefix":"Imported","priority":20,"validate":false}`)
+	batchRequest := httptest.NewRequest(http.MethodPost, "/api/admin/keys/import", bytes.NewReader(batchBody))
+	batchRequest.Header.Set("Content-Type", "application/json")
+	batchRequest.AddCookie(loginCookies[0])
+	batchResponse := httptest.NewRecorder()
+	restarted.ServeHTTP(batchResponse, batchRequest)
+	if batchResponse.Code != http.StatusOK {
+		t.Fatalf("batch import=%d %s", batchResponse.Code, batchResponse.Body.String())
+	}
+	if bytes.Contains(batchResponse.Body.Bytes(), []byte("batch-secret")) {
+		t.Fatalf("batch response disclosed a plaintext key: %s", batchResponse.Body.String())
+	}
+	var batchResult struct {
+		Total      int `json:"total"`
+		Imported   int `json:"imported"`
+		Duplicates int `json:"duplicates"`
+		Failed     int `json:"failed"`
+		Results    []struct {
+			Line   int    `json:"line"`
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(batchResponse.Body.Bytes(), &batchResult); err != nil {
+		t.Fatal(err)
+	}
+	if batchResult.Total != 3 || batchResult.Imported != 2 || batchResult.Duplicates != 1 || batchResult.Failed != 0 {
+		t.Fatalf("unexpected batch result: %#v", batchResult)
+	}
+	keys, err := db.ListKeys(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 || keys[0].Name != "Imported 01" || keys[0].Priority != 20 || keys[1].Name != "Imported 02" || keys[1].Priority != 21 {
+		t.Fatalf("unexpected imported keys: %#v", keys)
 	}
 }

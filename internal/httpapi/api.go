@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -60,6 +62,7 @@ func (a *API) Router() http.Handler {
 		admin.Post("/api/admin/logout", a.logout)
 		admin.Get("/api/admin/keys", a.listKeys)
 		admin.Post("/api/admin/keys", a.createKey)
+		admin.Post("/api/admin/keys/import", a.importKeys)
 		admin.Patch("/api/admin/keys/{id}", a.updateKey)
 		admin.Delete("/api/admin/keys/{id}", a.deleteKey)
 		admin.Post("/api/admin/keys/{id}/activate", a.activateKey)
@@ -167,21 +170,13 @@ func (a *API) createKey(w http.ResponseWriter, r *http.Request) {
 		TestInference bool   `json:"test_inference"`
 	}
 	if json.NewDecoder(r.Body).Decode(&input) != nil || strings.TrimSpace(input.Key) == "" {
-		writeJSON(w, 400, map[string]any{"error": "name and key are required"})
+		writeJSON(w, 400, map[string]any{"error": "key is required"})
 		return
-	}
-	if input.Name == "" {
-		input.Name = "Key " + cryptox.Fingerprint(input.Key)
 	}
 	if input.Priority == 0 {
 		input.Priority = 100
 	}
-	encrypted, err := a.identity.Encrypt(strings.TrimSpace(input.Key))
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	key, err := a.store.CreateKey(r.Context(), store.Key{Name: strings.TrimSpace(input.Name), EncryptedKey: encrypted, Fingerprint: cryptox.Fingerprint(strings.TrimSpace(input.Key)), Priority: input.Priority, AdminEnabled: true, AuthState: "unknown", QuotaState: "unknown", ControlState: "unknown"})
+	key, err := a.persistKey(r.Context(), input.Name, input.Key, input.Priority)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			writeJSON(w, 409, map[string]any{"error": "key already exists"})
@@ -196,6 +191,141 @@ func (a *API) createKey(w http.ResponseWriter, r *http.Request) {
 	}
 	fresh, _ := a.store.KeyByID(r.Context(), key.ID)
 	writeJSON(w, 201, map[string]any{"key": fresh, "test": result})
+}
+
+const maxImportKeys = 100
+
+type keyImportResult struct {
+	Line        int            `json:"line"`
+	Name        string         `json:"name"`
+	Fingerprint string         `json:"fingerprint,omitempty"`
+	Status      string         `json:"status"`
+	Error       string         `json:"error,omitempty"`
+	Key         *store.Key     `json:"key,omitempty"`
+	Test        map[string]any `json:"test,omitempty"`
+}
+
+func (a *API) importKeys(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Keys          []string `json:"keys"`
+		NamePrefix    string   `json:"name_prefix"`
+		Priority      int      `json:"priority"`
+		Validate      bool     `json:"validate"`
+		TestInference bool     `json:"test_inference"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON"})
+		return
+	}
+	if len(input.Keys) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "at least one key is required"})
+		return
+	}
+	if len(input.Keys) > maxImportKeys {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "at most 100 keys can be imported at once"})
+		return
+	}
+	if input.Priority == 0 {
+		input.Priority = 100
+	}
+	prefix := strings.TrimSpace(input.NamePrefix)
+	seen := make(map[string]struct{}, len(input.Keys))
+	results := make([]keyImportResult, 0, len(input.Keys))
+	imported, duplicates, failed := 0, 0, 0
+
+	for index, raw := range input.Keys {
+		line := index + 1
+		secret := strings.TrimSpace(raw)
+		result := keyImportResult{Line: line, Status: "failed"}
+		if secret == "" {
+			result.Error = "empty key"
+			failed++
+			results = append(results, result)
+			continue
+		}
+		if len(secret) > 4096 {
+			result.Error = "key is too long"
+			failed++
+			results = append(results, result)
+			continue
+		}
+		result.Fingerprint = cryptox.Fingerprint(secret)
+		if _, exists := seen[result.Fingerprint]; exists {
+			result.Status = "duplicate"
+			result.Error = "duplicate key in this import"
+			duplicates++
+			results = append(results, result)
+			continue
+		}
+		seen[result.Fingerprint] = struct{}{}
+		name := prefix
+		if name == "" {
+			name = "Key " + result.Fingerprint
+		} else if len(input.Keys) > 1 {
+			name = fmt.Sprintf("%s %02d", name, line)
+		}
+		result.Name = name
+		key, err := a.persistKey(r.Context(), name, secret, input.Priority+index)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				result.Status = "duplicate"
+				result.Error = "key already exists"
+				duplicates++
+			} else {
+				result.Error = "could not save key"
+				failed++
+			}
+			results = append(results, result)
+			continue
+		}
+		result.Status = "imported"
+		if input.Validate || input.TestInference {
+			testResult, testErr := a.proxy.TestKey(r.Context(), key, input.TestInference)
+			if testErr != nil {
+				result.Test = map[string]any{"ok": false, "message": testErr.Error()}
+			} else {
+				result.Test = testResult
+			}
+		}
+		fresh, err := a.store.KeyByID(r.Context(), key.ID)
+		if err == nil {
+			result.Key = &fresh
+		}
+		imported++
+		results = append(results, result)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":      len(input.Keys),
+		"imported":   imported,
+		"duplicates": duplicates,
+		"failed":     failed,
+		"results":    results,
+	})
+}
+
+func (a *API) persistKey(ctx context.Context, name, rawKey string, priority int) (store.Key, error) {
+	secret := strings.TrimSpace(rawKey)
+	fingerprint := cryptox.Fingerprint(secret)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "Key " + fingerprint
+	}
+	encrypted, err := a.identity.Encrypt(secret)
+	if err != nil {
+		return store.Key{}, err
+	}
+	return a.store.CreateKey(ctx, store.Key{
+		Name:         name,
+		EncryptedKey: encrypted,
+		Fingerprint:  fingerprint,
+		Priority:     priority,
+		AdminEnabled: true,
+		AuthState:    "unknown",
+		QuotaState:   "unknown",
+		ControlState: "unknown",
+	})
 }
 
 func (a *API) updateKey(w http.ResponseWriter, r *http.Request) {

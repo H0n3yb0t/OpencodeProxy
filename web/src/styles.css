@@ -26,7 +26,8 @@ body {
 }
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 .boot,
@@ -99,7 +100,8 @@ form label,
   font-size: 13px;
 }
 input,
-select {
+select,
+textarea {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -109,7 +111,8 @@ select {
   outline: none;
 }
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: #6ee7b777;
   box-shadow: 0 0 0 3px #6ee7b711;
 }
@@ -184,7 +187,9 @@ select:focus {
 .rotated-token code {
   overflow: hidden;
   color: var(--mint);
-  font: 12px ui-monospace, monospace;
+  font:
+    12px ui-monospace,
+    monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -680,6 +685,62 @@ nav a.active span {
 .add-key label {
   margin: 5px 0 13px;
 }
+.add-key textarea {
+  min-height: 150px;
+  resize: vertical;
+  font:
+    12px/1.6 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.import-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+.import-result {
+  margin: 8px 0 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0b0e13;
+}
+.import-result > strong {
+  color: var(--mint);
+}
+.import-result > span {
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.import-result > div {
+  max-height: 220px;
+  overflow: auto;
+  margin-top: 10px;
+}
+.import-result p {
+  display: grid;
+  grid-template-columns: 72px 105px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  margin: 0;
+  padding: 7px 0;
+  border-top: 1px solid #1d222b;
+  color: #aeb5c0;
+  font-size: 11px;
+}
+.import-result p.imported b {
+  color: var(--mint);
+}
+.import-result p.duplicate b {
+  color: var(--amber);
+}
+.import-result p.failed b {
+  color: var(--danger);
+}
+.import-result code {
+  color: #737d8b;
+}
 .check {
   display: flex !important;
   grid-template-columns: auto 1fr !important;
@@ -986,6 +1047,12 @@ dd {
   }
   .add-key > div {
     grid-template-columns: 1fr;
+  }
+  .import-result p {
+    grid-template-columns: 70px minmax(0, 1fr);
+  }
+  .import-result p span {
+    grid-column: 1 / -1;
   }
   .filters {
     display: none;
