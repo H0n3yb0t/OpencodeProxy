@@ -1,0 +1,22 @@
+services:
+  keypool:
+    build: .
+    image: opencode-keypool:local
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY in .env}
+      PROXY_TOKEN: ${PROXY_TOKEN:?set PROXY_TOKEN in .env}
+      TZ: ${TZ:-Asia/Hong_Kong}
+    volumes:
+      - keypool-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  keypool-data:

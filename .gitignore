@@ -1,0 +1,11 @@
+.cache/
+.tmp/
+.env
+*.db
+*.db-shm
+*.db-wal
+keypool.exe
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+
