@@ -108,6 +108,69 @@ func TestWebSetupPersistsAndRotatesProxyToken(t *testing.T) {
 		}
 	}
 
+	enrollmentRequest := httptest.NewRequest(http.MethodPost, "/api/admin/client-enrollments", bytes.NewBufferString(`{"name":"Windows workstation"}`))
+	enrollmentRequest.Header.Set("Content-Type", "application/json")
+	enrollmentRequest.AddCookie(cookies[0])
+	enrollmentResponse := httptest.NewRecorder()
+	router.ServeHTTP(enrollmentResponse, enrollmentRequest)
+	if enrollmentResponse.Code != http.StatusCreated {
+		t.Fatalf("create client enrollment=%d %s", enrollmentResponse.Code, enrollmentResponse.Body.String())
+	}
+	var enrollment struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.Unmarshal(enrollmentResponse.Body.Bytes(), &enrollment); err != nil || enrollment.Ticket == "" {
+		t.Fatalf("invalid enrollment response: %v %s", err, enrollmentResponse.Body.String())
+	}
+
+	enrollBody, _ := json.Marshal(map[string]string{"ticket": enrollment.Ticket, "base_url": "http://proxy.test:8080"})
+	enrollRequest := httptest.NewRequest(http.MethodPost, "/api/client/enroll", bytes.NewReader(enrollBody))
+	enrollRequest.Header.Set("Content-Type", "application/json")
+	enrollResponse := httptest.NewRecorder()
+	router.ServeHTTP(enrollResponse, enrollRequest)
+	if enrollResponse.Code != http.StatusCreated {
+		t.Fatalf("client enroll=%d %s", enrollResponse.Code, enrollResponse.Body.String())
+	}
+	var clientPayload struct {
+		ProxyToken string               `json:"proxy_token"`
+		Client     identity.ClientToken `json:"client"`
+		Providers  map[string]any       `json:"providers"`
+	}
+	if err := json.Unmarshal(enrollResponse.Body.Bytes(), &clientPayload); err != nil {
+		t.Fatal(err)
+	}
+	if clientPayload.ProxyToken == "" || clientPayload.Client.ID == "" || len(clientPayload.Providers) != 2 || !identityManager.VerifyProxy(clientPayload.ProxyToken) {
+		t.Fatalf("invalid client enrollment payload: %#v", clientPayload)
+	}
+
+	reusedRequest := httptest.NewRequest(http.MethodPost, "/api/client/enroll", bytes.NewReader(enrollBody))
+	reusedResponse := httptest.NewRecorder()
+	router.ServeHTTP(reusedResponse, reusedRequest)
+	if reusedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("reused enrollment=%d %s", reusedResponse.Code, reusedResponse.Body.String())
+	}
+
+	clientAuthRequest := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	clientAuthRequest.Header.Set("Authorization", "Bearer "+clientPayload.ProxyToken)
+	clientAuthResponse := httptest.NewRecorder()
+	router.ServeHTTP(clientAuthResponse, clientAuthRequest)
+	if clientAuthResponse.Code == http.StatusUnauthorized {
+		t.Fatal("issued client token was rejected")
+	}
+
+	revokeRequest := httptest.NewRequest(http.MethodDelete, "/api/admin/client-tokens/"+clientPayload.Client.ID, nil)
+	revokeRequest.AddCookie(cookies[0])
+	revokeResponse := httptest.NewRecorder()
+	router.ServeHTTP(revokeResponse, revokeRequest)
+	if revokeResponse.Code != http.StatusNoContent {
+		t.Fatalf("revoke client token=%d %s", revokeResponse.Code, revokeResponse.Body.String())
+	}
+	clientAuthAfterRevoke := httptest.NewRecorder()
+	router.ServeHTTP(clientAuthAfterRevoke, clientAuthRequest)
+	if clientAuthAfterRevoke.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked client token status=%d", clientAuthAfterRevoke.Code)
+	}
+
 	rotateRequest := httptest.NewRequest(http.MethodPost, "/api/admin/proxy-token/rotate", nil)
 	rotateRequest.AddCookie(cookies[0])
 	rotatedResponse := httptest.NewRecorder()

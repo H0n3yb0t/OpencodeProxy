@@ -29,12 +29,26 @@ type Secrets struct {
 }
 
 type diskState struct {
-	Version           int       `json:"version"`
-	MasterKey         string    `json:"master_key"`
-	AdminPasswordHash string    `json:"admin_password_hash"`
-	ProxyTokenHash    string    `json:"proxy_token_hash"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	Version           int                `json:"version"`
+	MasterKey         string             `json:"master_key"`
+	AdminPasswordHash string             `json:"admin_password_hash"`
+	ProxyTokenHash    string             `json:"proxy_token_hash"`
+	ClientTokens      []clientTokenState `json:"client_tokens,omitempty"`
+	CreatedAt         time.Time          `json:"created_at"`
+	UpdatedAt         time.Time          `json:"updated_at"`
+}
+
+type ClientToken struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type clientTokenState struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	TokenHash string    `json:"token_hash"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Manager struct {
@@ -154,12 +168,21 @@ func (m *Manager) VerifyProxy(token string) bool {
 	if m.state == nil {
 		return false
 	}
-	want, err := hex.DecodeString(m.state.ProxyTokenHash)
-	if err != nil {
-		return false
-	}
 	got := sha256.Sum256([]byte(token))
-	return subtle.ConstantTimeCompare(got[:], want) == 1
+	if hashMatches(got[:], m.state.ProxyTokenHash) {
+		return true
+	}
+	for _, client := range m.state.ClientTokens {
+		if hashMatches(got[:], client.TokenHash) {
+			return true
+		}
+	}
+	return false
+}
+
+func hashMatches(got []byte, encoded string) bool {
+	want, err := hex.DecodeString(encoded)
+	return err == nil && subtle.ConstantTimeCompare(got, want) == 1
 }
 
 func (m *Manager) Encrypt(plaintext string) ([]byte, error) {
@@ -199,6 +222,91 @@ func (m *Manager) RotateProxyToken() (string, error) {
 		return "", err
 	}
 	return token, nil
+}
+
+func (m *Manager) IssueClientToken(name string) (ClientToken, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state == nil {
+		return ClientToken{}, "", errors.New("instance setup is required")
+	}
+	if len(m.state.ClientTokens) >= 100 {
+		return ClientToken{}, "", errors.New("client token limit reached")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "OpenCode client"
+	}
+	nameRunes := []rune(name)
+	if len(nameRunes) > 80 {
+		name = string(nameRunes[:80])
+	}
+	raw, err := randomBytes(32)
+	if err != nil {
+		return ClientToken{}, "", err
+	}
+	idRaw, err := randomBytes(12)
+	if err != nil {
+		return ClientToken{}, "", err
+	}
+	token := "opc_" + base64.RawURLEncoding.EncodeToString(raw)
+	client := clientTokenState{
+		ID:        hex.EncodeToString(idRaw),
+		Name:      name,
+		TokenHash: tokenHash(token),
+		CreatedAt: time.Now().UTC(),
+	}
+	previous := append([]clientTokenState(nil), m.state.ClientTokens...)
+	previousUpdatedAt := m.state.UpdatedAt
+	m.state.ClientTokens = append(m.state.ClientTokens, client)
+	m.state.UpdatedAt = client.CreatedAt
+	if err := m.persistLocked(); err != nil {
+		m.state.ClientTokens = previous
+		m.state.UpdatedAt = previousUpdatedAt
+		return ClientToken{}, "", err
+	}
+	return ClientToken{ID: client.ID, Name: client.Name, CreatedAt: client.CreatedAt}, token, nil
+}
+
+func (m *Manager) ListClientTokens() []ClientToken {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.state == nil || len(m.state.ClientTokens) == 0 {
+		return []ClientToken{}
+	}
+	result := make([]ClientToken, len(m.state.ClientTokens))
+	for i, client := range m.state.ClientTokens {
+		result[i] = ClientToken{ID: client.ID, Name: client.Name, CreatedAt: client.CreatedAt}
+	}
+	return result
+}
+
+func (m *Manager) RevokeClientToken(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state == nil {
+		return errors.New("instance setup is required")
+	}
+	index := -1
+	for i := range m.state.ClientTokens {
+		if m.state.ClientTokens[i].ID == id {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return os.ErrNotExist
+	}
+	previous := append([]clientTokenState(nil), m.state.ClientTokens...)
+	previousUpdatedAt := m.state.UpdatedAt
+	m.state.ClientTokens = append(m.state.ClientTokens[:index], m.state.ClientTokens[index+1:]...)
+	m.state.UpdatedAt = time.Now().UTC()
+	if err := m.persistLocked(); err != nil {
+		m.state.ClientTokens = previous
+		m.state.UpdatedAt = previousUpdatedAt
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) loadCipher() error {

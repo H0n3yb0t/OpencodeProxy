@@ -97,6 +97,15 @@ type KeyImportResponse = {
   failed: number;
   results: KeyImportResult[];
 };
+type ClientToken = {
+  id: string;
+  name: string;
+  created_at: string;
+};
+type ClientEnrollment = {
+  ticket: string;
+  expires_at: string;
+};
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, {
@@ -373,7 +382,8 @@ function App() {
             ["dashboard", "总览", "01"],
             ["keys", "密钥池", "02"],
             ["requests", "请求流水", "03"],
-            ["settings", "设置", "04"],
+            ["clients", "客户端接入", "04"],
+            ["settings", "设置", "05"],
           ].map(([id, label, num]) => (
             <a key={id} className={page === id ? "active" : ""} href={`#${id}`}>
               <span>{num}</span>
@@ -390,6 +400,7 @@ function App() {
         {page === "dashboard" && <Dashboard refresh={refresh} />}{" "}
         {page === "keys" && <Keys refresh={refresh} />}{" "}
         {page === "requests" && <Requests refresh={refresh} />}{" "}
+        {page === "clients" && <ClientsPage />}{" "}
         {page === "settings" && <SettingsPage />}
       </section>
     </div>
@@ -1054,6 +1065,174 @@ function Requests({ refresh }: { refresh: number }) {
           </div>
         )}
       </section>
+    </>
+  );
+}
+
+function ClientsPage() {
+  const [name, setName] = useState("我的 OpenCode 客户端");
+  const [platform, setPlatform] = useState<"powershell" | "shell">(
+    /Windows/i.test(navigator.userAgent) ? "powershell" : "shell",
+  );
+  const [enrollment, setEnrollment] = useState<ClientEnrollment | null>(null);
+  const [tokens, setTokens] = useState<ClientToken[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  const loadTokens = useCallback(() => {
+    api<{ tokens: ClientToken[] }>("/api/admin/client-tokens")
+      .then((result) => setTokens(result.tokens || []))
+      .catch((error) => setMessage((error as Error).message));
+  }, []);
+
+  useEffect(() => loadTokens(), [loadTokens]);
+  useEffect(() => {
+    if (!enrollment) return;
+    const timer = setInterval(loadTokens, 4000);
+    return () => clearInterval(timer);
+  }, [enrollment, loadTokens]);
+
+  const generate = async () => {
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await api<ClientEnrollment>(
+        "/api/admin/client-enrollments",
+        { method: "POST", body: JSON.stringify({ name }) },
+      );
+      setEnrollment(result);
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (token: ClientToken) => {
+    if (!confirm(`撤销“${token.name}”的代理访问权限？`)) return;
+    try {
+      await api(`/api/admin/client-tokens/${token.id}`, { method: "DELETE" });
+      loadTokens();
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  };
+
+  const origin = location.origin;
+  const psQuote = (value: string) => value.replaceAll("'", "''");
+  const shQuote = (value: string) => value.replaceAll("'", "'\"'\"'");
+  const command = enrollment
+    ? platform === "powershell"
+      ? `& ([scriptblock]::Create((Invoke-RestMethod '${psQuote(origin)}/api/client/install.ps1'))) -Server '${psQuote(origin)}' -Ticket '${psQuote(enrollment.ticket)}'`
+      : `curl -fsSL '${shQuote(origin)}/api/client/install.sh' | sh -s -- '${shQuote(origin)}' '${shQuote(enrollment.ticket)}'`
+    : "";
+
+  return (
+    <>
+      <PageHead kicker="CLIENT ONBOARDING" title="客户端接入" />
+      <section className="client-grid">
+        <article className="panel client-installer">
+          <div className="panel-head">
+            <div>
+              <h3>一键配置 OpenCode</h3>
+              <p className="muted">
+                自动备份并合并全局配置，同时安装 OpenAI 与 Anthropic 两组模型。
+              </p>
+            </div>
+          </div>
+          <label>
+            客户端名称
+            <input
+              value={name}
+              maxLength={80}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="例如：办公室 Windows"
+            />
+          </label>
+          <div className="platform-tabs">
+            <button
+              className={platform === "powershell" ? "active" : ""}
+              onClick={() => setPlatform("powershell")}
+            >
+              Windows PowerShell
+            </button>
+            <button
+              className={platform === "shell" ? "active" : ""}
+              onClick={() => setPlatform("shell")}
+            >
+              macOS / Linux
+            </button>
+          </div>
+          {!enrollment ? (
+            <button
+              className="primary"
+              disabled={busy || !name.trim()}
+              onClick={generate}
+            >
+              {busy ? "正在生成…" : "生成一次性安装命令"}
+            </button>
+          ) : (
+            <div className="install-command">
+              <div className="command-meta">
+                <strong>
+                  复制到{platform === "powershell" ? " PowerShell" : "终端"}执行
+                </strong>
+                <span>一次性凭证，{countdown(enrollment.expires_at)}后失效</span>
+              </div>
+              <code>{command}</code>
+              <div className="command-actions">
+                <button
+                  className="primary compact"
+                  onClick={() => copyText(command)}
+                >
+                  复制命令
+                </button>
+                <button
+                  className="secondary compact"
+                  onClick={generate}
+                  disabled={busy}
+                >
+                  重新生成
+                </button>
+              </div>
+            </div>
+          )}
+          <ul className="installer-notes">
+            <li>长期代理 token 不会出现在命令或浏览器中；安装时签发独立客户端 token。</li>
+            <li>现有配置会先生成带时间戳的备份，再合并 OpencodeProxy Provider。</li>
+            <li>macOS/Linux 安装器使用 Python 3 安全解析 JSON/JSONC。</li>
+          </ul>
+        </article>
+
+        <article className="panel client-list">
+          <div className="panel-head">
+            <div>
+              <h3>已接入客户端</h3>
+              <p className="muted">每台客户端拥有独立凭证，可单独撤销。</p>
+            </div>
+            <button className="secondary compact" onClick={loadTokens}>
+              刷新
+            </button>
+          </div>
+          <div className="client-token-list">
+            {tokens.map((token) => (
+              <div className="client-token" key={token.id}>
+                <div>
+                  <strong>{token.name}</strong>
+                  <span>创建于 {formatDate(token.created_at)}</span>
+                </div>
+                <button className="danger compact" onClick={() => revoke(token)}>
+                  撤销
+                </button>
+              </div>
+            ))}
+            {!tokens.length && (
+              <div className="empty-state">尚未通过一键命令接入客户端。</div>
+            )}
+          </div>
+        </article>
+      </section>
+      {message && <div className="toast">{message}</div>}
     </>
   );
 }

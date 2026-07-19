@@ -144,6 +144,17 @@ textarea:focus {
 .secondary.compact {
   font-size: 11px;
 }
+.danger {
+  border: 1px solid #553038;
+  border-radius: 9px;
+  background: #25161a;
+  color: var(--danger);
+  padding: 9px 13px;
+  cursor: pointer;
+}
+.danger.compact {
+  font-size: 11px;
+}
 .setup-card {
   width: min(680px, 100%);
 }
@@ -819,6 +830,121 @@ td small {
   grid-template-columns: 1fr 1fr;
   gap: 14px;
 }
+.client-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 14px;
+}
+.client-grid .panel {
+  margin: 0;
+}
+.client-installer .panel-head {
+  align-items: flex-start;
+}
+.client-installer .panel-head p,
+.client-list .panel-head p {
+  margin: 7px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.platform-tabs {
+  display: flex;
+  gap: 7px;
+  margin: 20px 0;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0b0e13;
+}
+.platform-tabs button {
+  flex: 1;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  padding: 10px;
+  cursor: pointer;
+}
+.platform-tabs button.active {
+  background: #1b2421;
+  color: var(--mint);
+}
+.install-command {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #365449;
+  border-radius: 12px;
+  background: #101b17;
+}
+.command-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 11px;
+}
+.command-meta span {
+  color: var(--amber);
+}
+.install-command code {
+  display: block;
+  max-height: 180px;
+  overflow: auto;
+  padding: 13px;
+  border-radius: 8px;
+  background: #080b0f;
+  color: #d4dae3;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.command-actions {
+  display: flex;
+  gap: 8px;
+}
+.installer-notes {
+  margin: 20px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.8;
+}
+.client-token-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 18px;
+}
+.client-token {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #10141a;
+}
+.client-token > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+.client-token strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+.client-token span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.client-token-list .empty-state {
+  padding: 45px 20px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 11px;
+}
 .settings-grid .panel {
   margin: 0;
 }
@@ -994,6 +1120,9 @@ dd {
     grid-template-columns: 1fr 1fr;
   }
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+  .client-grid {
     grid-template-columns: 1fr;
   }
   .deployment {

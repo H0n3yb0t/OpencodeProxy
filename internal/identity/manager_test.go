@@ -61,6 +61,37 @@ func TestRotateProxyTokenInvalidatesPreviousToken(t *testing.T) {
 	}
 }
 
+func TestClientTokensPersistAndCanBeRevoked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "instance.json")
+	manager, _ := Open(path, nil, "", "")
+	_, _ = manager.Initialize()
+	client, token, err := manager.IssueClientToken("Laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.ID == "" || client.Name != "Laptop" || token == "" || !manager.VerifyProxy(token) {
+		t.Fatalf("invalid client token: %#v", client)
+	}
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), token) {
+		t.Fatal("plaintext client token was persisted")
+	}
+	reloaded, err := Open(path, nil, "", "")
+	if err != nil || !reloaded.VerifyProxy(token) {
+		t.Fatalf("client token did not survive reload: %v", err)
+	}
+	listed := reloaded.ListClientTokens()
+	if len(listed) != 1 || listed[0].ID != client.ID {
+		t.Fatalf("unexpected client token list: %#v", listed)
+	}
+	if err := reloaded.RevokeClientToken(client.ID); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.VerifyProxy(token) || len(reloaded.ListClientTokens()) != 0 {
+		t.Fatal("revoked client token is still active")
+	}
+}
+
 func TestInitializeAllowsExactlyOneConcurrentCaller(t *testing.T) {
 	manager, err := Open(filepath.Join(t.TempDir(), "instance.json"), nil, "", "")
 	if err != nil {

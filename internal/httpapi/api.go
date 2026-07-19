@@ -24,15 +24,16 @@ import (
 )
 
 type API struct {
-	cfg      config.Config
-	store    *store.Store
-	identity *identity.Manager
-	proxy    *proxy.Service
-	sessions *sessionStore
+	cfg         config.Config
+	store       *store.Store
+	identity    *identity.Manager
+	proxy       *proxy.Service
+	sessions    *sessionStore
+	enrollments *enrollmentStore
 }
 
 func New(cfg config.Config, db *store.Store, identityManager *identity.Manager, proxyService *proxy.Service) *API {
-	return &API{cfg: cfg, store: db, identity: identityManager, proxy: proxyService, sessions: newSessionStore()}
+	return &API{cfg: cfg, store: db, identity: identityManager, proxy: proxyService, sessions: newSessionStore(), enrollments: newEnrollmentStore()}
 }
 
 func (a *API) Router() http.Handler {
@@ -49,6 +50,9 @@ func (a *API) Router() http.Handler {
 	})
 	r.Get("/api/setup/status", a.setupStatus)
 	r.Post("/api/setup/initialize", a.setupInitialize)
+	r.Get("/api/client/install.ps1", a.clientInstallPowerShell)
+	r.Get("/api/client/install.sh", a.clientInstallShell)
+	r.Post("/api/client/enroll", a.clientEnroll)
 	r.Group(func(p chi.Router) {
 		p.Use(a.proxyAuth)
 		p.Get("/v1/models", a.proxy.HandleModels)
@@ -70,6 +74,9 @@ func (a *API) Router() http.Handler {
 		admin.Get("/api/admin/settings", a.getSettings)
 		admin.Put("/api/admin/settings", a.updateSettings)
 		admin.Post("/api/admin/proxy-token/rotate", a.rotateProxyToken)
+		admin.Get("/api/admin/client-tokens", a.listClientTokens)
+		admin.Post("/api/admin/client-enrollments", a.createClientEnrollment)
+		admin.Delete("/api/admin/client-tokens/{id}", a.revokeClientToken)
 		admin.Get("/api/admin/requests", a.requests)
 		admin.Get("/api/admin/dashboard", a.dashboard)
 		admin.Get("/api/admin/stream", a.events)

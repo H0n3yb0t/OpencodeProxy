@@ -12,6 +12,7 @@
 - AES-GCM 加密保存上游 key，UI 只显示指纹
 - 统计输入、输出、cache read、cache write、TTFT、延迟和故障转移
 - 最近 100 条请求流水，不保存 prompt 和模型输出
+- Web UI 生成一次性安装命令，自动配置 Windows、macOS 和 Linux 上的 OpenCode
 - 单管理员 Web UI、SQLite 持久化、单容器部署
 
 ## Docker Compose 部署
@@ -32,7 +33,7 @@ docker compose up -d --build
 
 > 尚未初始化时，第一个访问初始化页面的人可以取得管理权。不要把全新实例直接暴露在不可信公网。初始化完成后，管理 UI 和推理 API 都需要鉴权。
 
-初始化是原子单次操作。完成后初始化接口关闭并返回 `404 Not Found`，已生成的凭据无法通过该接口再次读取或重置。代理 token 只能由已登录管理员在设置页轮换。
+初始化是原子单次操作。完成后初始化接口关闭并返回 `404 Not Found`，已生成的凭据无法通过该接口再次读取或重置。主代理 token 只能由已登录管理员在设置页轮换；客户端接入页可以签发和撤销相互独立的客户端 token。
 
 配置、加密主密钥和数据库保存在 Docker 数据卷 `opencodeproxy-data`。备份和迁移时应备份整个数据卷，并单独安全保存恢复密钥。
 
@@ -64,6 +65,22 @@ GitHub Actions 工作流会将 `master` 分支的每次推送构建为 `h0n3yb0t
 仓库需要配置 Actions secret `DOCKERHUB_TOKEN`，其值为具备 Docker Hub 仓库读写权限的 Personal Access Token。发布任务也可以从 GitHub Actions 页面手动触发。
 
 ## 客户端接入
+
+### OpenCode 一键配置
+
+登录 Web UI，进入“客户端接入”，填写客户端名称并选择操作系统。页面会生成一条 10 分钟有效、仅可执行一次的安装命令。安装器会：
+
+- 自动定位 OpenCode 全局配置目录
+- 解析并备份现有 `opencode.json` 或 `opencode.jsonc`
+- 合并 OpenAI-compatible 与 Anthropic-compatible 两组 Provider 和模型
+- 将独立客户端 token 写入权限受限的 `opencodeproxy.token`，配置中通过 `{file:...}` 引用
+- 保留已有默认模型；未设置默认模型时使用 `mimo-v2.5`
+
+Windows 使用系统自带 PowerShell。macOS/Linux 需要 `curl` 和 Python 3。安装完成后重启 OpenCode，执行 `/models` 并选择 `OpencodeProxy`。每台客户端拥有独立凭证，可以从同一页面单独撤销，不影响主代理 token 或其他客户端。
+
+一次性安装凭证会出现在本机终端历史中，但它不包含长期代理 token，成功使用后立即失效，未使用时在 10 分钟后过期。
+
+### 通用 API 接入
 
 OpenAI-compatible：
 
