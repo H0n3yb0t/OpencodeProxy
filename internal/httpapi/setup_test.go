@@ -15,7 +15,7 @@ import (
 	"github.com/H0n3yb0t/OpencodeProxy/internal/store"
 )
 
-func TestWebSetupPersistsAndRotatesProxyToken(t *testing.T) {
+func TestWebSetupPersistsUnifiedAccessAndClientTokens(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Config{
 		DatabasePath:    filepath.Join(dir, "opencodeproxy.db"),
@@ -55,7 +55,7 @@ func TestWebSetupPersistsAndRotatesProxyToken(t *testing.T) {
 	if err := json.Unmarshal(initialized.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Secrets.AdminPassword == "" || payload.Secrets.ProxyToken == "" {
+	if payload.Secrets.AccessKey == "" || payload.Secrets.RecoveryKey == "" {
 		t.Fatalf("missing secrets: %#v", payload)
 	}
 
@@ -66,12 +66,11 @@ func TestWebSetupPersistsAndRotatesProxyToken(t *testing.T) {
 	if repeated.Code != http.StatusNotFound {
 		t.Fatalf("repeated initialize=%d %s", repeated.Code, repeated.Body.String())
 	}
-	if bytes.Contains(repeated.Body.Bytes(), []byte("admin_password")) ||
-		bytes.Contains(repeated.Body.Bytes(), []byte("proxy_token")) ||
+	if bytes.Contains(repeated.Body.Bytes(), []byte("access_key")) ||
 		bytes.Contains(repeated.Body.Bytes(), []byte("recovery_key")) {
 		t.Fatalf("repeated initialization disclosed credentials: %s", repeated.Body.String())
 	}
-	if !identityManager.VerifyAdmin(payload.Secrets.AdminPassword) || !identityManager.VerifyProxy(payload.Secrets.ProxyToken) {
+	if !identityManager.VerifyAdmin(payload.Secrets.AccessKey) || !identityManager.VerifyProxy(payload.Secrets.AccessKey) {
 		t.Fatal("repeated initialization changed the original credentials")
 	}
 	cookies := initialized.Result().Cookies()
@@ -171,7 +170,43 @@ func TestWebSetupPersistsAndRotatesProxyToken(t *testing.T) {
 		t.Fatalf("revoked client token status=%d", clientAuthAfterRevoke.Code)
 	}
 
-	rotateRequest := httptest.NewRequest(http.MethodPost, "/api/admin/proxy-token/rotate", nil)
+	manualRequest := httptest.NewRequest(http.MethodPost, "/api/admin/client-tokens", bytes.NewBufferString(`{"name":"manual client"}`))
+	manualRequest.Header.Set("Content-Type", "application/json")
+	manualRequest.AddCookie(cookies[0])
+	manualResponse := httptest.NewRecorder()
+	router.ServeHTTP(manualResponse, manualRequest)
+	if manualResponse.Code != http.StatusCreated {
+		t.Fatalf("manual client=%d %s", manualResponse.Code, manualResponse.Body.String())
+	}
+	var manualClient struct {
+		Client     identity.ClientToken `json:"client"`
+		ProxyToken string               `json:"proxy_token"`
+	}
+	if err := json.Unmarshal(manualResponse.Body.Bytes(), &manualClient); err != nil || manualClient.ProxyToken == "" {
+		t.Fatalf("invalid manual client response: %v %s", err, manualResponse.Body.String())
+	}
+	renameRequest := httptest.NewRequest(http.MethodPatch, "/api/admin/client-tokens/"+manualClient.Client.ID, bytes.NewBufferString(`{"name":"renamed client"}`))
+	renameRequest.Header.Set("Content-Type", "application/json")
+	renameRequest.AddCookie(cookies[0])
+	renameResponse := httptest.NewRecorder()
+	router.ServeHTTP(renameResponse, renameRequest)
+	if renameResponse.Code != http.StatusOK || !bytes.Contains(renameResponse.Body.Bytes(), []byte("renamed client")) {
+		t.Fatalf("rename client=%d %s", renameResponse.Code, renameResponse.Body.String())
+	}
+	clientInference := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"mimo-v2.5","messages":[{"role":"user","content":"OK"}]}`))
+	clientInference.Header.Set("Authorization", "Bearer "+manualClient.ProxyToken)
+	clientInferenceResponse := httptest.NewRecorder()
+	router.ServeHTTP(clientInferenceResponse, clientInference)
+	clientDashboardRequest := httptest.NewRequest(http.MethodGet, "/api/admin/client-dashboard?window=5h", nil)
+	clientDashboardRequest.AddCookie(cookies[0])
+	clientDashboardResponse := httptest.NewRecorder()
+	router.ServeHTTP(clientDashboardResponse, clientDashboardRequest)
+	if clientDashboardResponse.Code != http.StatusOK || !bytes.Contains(clientDashboardResponse.Body.Bytes(), []byte(`"name":"renamed client"`)) || !bytes.Contains(clientDashboardResponse.Body.Bytes(), []byte(`"requests":1`)) {
+		t.Fatalf("client dashboard=%d %s", clientDashboardResponse.Code, clientDashboardResponse.Body.String())
+	}
+	retainedClientToken := manualClient.ProxyToken
+	rotateRequest := httptest.NewRequest(http.MethodPut, "/api/admin/access-key", bytes.NewBufferString(`{"access_key":"new-unified-access-key-123"}`))
+	rotateRequest.Header.Set("Content-Type", "application/json")
 	rotateRequest.AddCookie(cookies[0])
 	rotatedResponse := httptest.NewRecorder()
 	router.ServeHTTP(rotatedResponse, rotateRequest)
@@ -179,26 +214,29 @@ func TestWebSetupPersistsAndRotatesProxyToken(t *testing.T) {
 		t.Fatalf("rotate=%d %s", rotatedResponse.Code, rotatedResponse.Body.String())
 	}
 	var rotated struct {
-		ProxyToken string `json:"proxy_token"`
+		AccessKey string `json:"access_key"`
 	}
 	_ = json.Unmarshal(rotatedResponse.Body.Bytes(), &rotated)
-	if rotated.ProxyToken == "" || rotated.ProxyToken == payload.Secrets.ProxyToken {
-		t.Fatal("token was not rotated")
+	if rotated.AccessKey == "" || rotated.AccessKey == payload.Secrets.AccessKey {
+		t.Fatal("access key was not rotated")
 	}
 
 	oldTokenRequest := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	oldTokenRequest.Header.Set("Authorization", "Bearer "+payload.Secrets.ProxyToken)
+	oldTokenRequest.Header.Set("Authorization", "Bearer "+payload.Secrets.AccessKey)
 	oldTokenResponse := httptest.NewRecorder()
 	router.ServeHTTP(oldTokenResponse, oldTokenRequest)
 	if oldTokenResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("old token status=%d", oldTokenResponse.Code)
 	}
 	newTokenRequest := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	newTokenRequest.Header.Set("Authorization", "Bearer "+rotated.ProxyToken)
+	newTokenRequest.Header.Set("Authorization", "Bearer "+rotated.AccessKey)
 	newTokenResponse := httptest.NewRecorder()
 	router.ServeHTTP(newTokenResponse, newTokenRequest)
 	if newTokenResponse.Code == http.StatusUnauthorized {
-		t.Fatal("new token was rejected")
+		t.Fatal("new access key was rejected by proxy auth")
+	}
+	if !identityManager.VerifyAdmin(rotated.AccessKey) || !identityManager.VerifyProxy(retainedClientToken) {
+		t.Fatal("access key was not unified or an independent client token was invalidated")
 	}
 
 	reloadedIdentity, err := identity.Open(cfg.InstancePath, nil, "", "")
@@ -206,7 +244,7 @@ func TestWebSetupPersistsAndRotatesProxyToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted := New(cfg, db, reloadedIdentity, proxy.NewService(cfg, db, reloadedIdentity)).Router()
-	loginRequest := httptest.NewRequest(http.MethodPost, "/api/admin/login", bytes.NewBufferString(`{"password":"`+payload.Secrets.AdminPassword+`"}`))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/admin/login", bytes.NewBufferString(`{"password":"`+rotated.AccessKey+`"}`))
 	loginRequest.Header.Set("Content-Type", "application/json")
 	loginResponse := httptest.NewRecorder()
 	restarted.ServeHTTP(loginResponse, loginRequest)

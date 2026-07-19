@@ -41,6 +41,17 @@ func Load() (Config, error) {
 	}
 	cfg.InstancePath = env("INSTANCE_PATH", filepath.Join(filepath.Dir(cfg.DatabasePath), "instance.json"))
 	encoded := os.Getenv("MASTER_KEY")
+	accessKey := os.Getenv("ACCESS_KEY")
+	if accessKey != "" {
+		if cfg.AdminPassword != "" || cfg.BootstrapToken != "" {
+			return Config{}, errors.New("ACCESS_KEY cannot be combined with ADMIN_PASSWORD or PROXY_TOKEN")
+		}
+		if encoded == "" {
+			return Config{}, errors.New("MASTER_KEY is required when ACCESS_KEY is supplied")
+		}
+		cfg.AdminPassword = accessKey
+		cfg.BootstrapToken = accessKey
+	}
 	legacyCount := 0
 	if encoded != "" {
 		legacyCount++
@@ -52,7 +63,7 @@ func Load() (Config, error) {
 		legacyCount++
 	}
 	if legacyCount != 0 && legacyCount != 3 {
-		return Config{}, errors.New("MASTER_KEY, ADMIN_PASSWORD and PROXY_TOKEN must be supplied together, or all omitted for Web setup")
+		return Config{}, errors.New("supply MASTER_KEY with ACCESS_KEY, use the legacy MASTER_KEY/ADMIN_PASSWORD/PROXY_TOKEN set, or omit all credentials for Web setup")
 	}
 	if encoded != "" {
 		key, err := base64.StdEncoding.DecodeString(encoded)

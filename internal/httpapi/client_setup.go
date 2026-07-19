@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -162,6 +163,52 @@ func (a *API) listClientTokens(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tokens": a.identity.ListClientTokens()})
 }
 
+func (a *API) createClientToken(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+		return
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" || utf8.RuneCountInString(name) > 80 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "client name must contain 1 to 80 characters"})
+		return
+	}
+	client, token, err := a.identity.IssueClientToken(name)
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusCreated, map[string]any{"client": client, "proxy_token": token})
+}
+
+func (a *API) renameClientToken(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+		return
+	}
+	client, err := a.identity.RenameClientToken(chi.URLParam(r, "id"), input.Name)
+	if os.IsNotExist(err) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "client token not found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := a.store.RenameRequestClient(r.Context(), client.ID, client.Name); err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, client)
+}
+
 func (a *API) revokeClientToken(w http.ResponseWriter, r *http.Request) {
 	err := a.identity.RevokeClientToken(chi.URLParam(r, "id"))
 	if os.IsNotExist(err) {
@@ -173,6 +220,60 @@ func (a *API) revokeClientToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type clientDashboardItem struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Kind          string    `json:"kind"`
+	Active        bool      `json:"active"`
+	CreatedAt     time.Time `json:"created_at,omitempty"`
+	Requests      int64     `json:"requests"`
+	Successes     int64     `json:"successes"`
+	Failures      int64     `json:"failures"`
+	Failovers     int64     `json:"failovers"`
+	InputUncached int64     `json:"input_uncached"`
+	CacheRead     int64     `json:"cache_read"`
+	CacheWrite    int64     `json:"cache_write"`
+	OutputTokens  int64     `json:"output_tokens"`
+	UsageComplete int64     `json:"usage_complete"`
+	AvgLatencyMS  int64     `json:"avg_latency_ms"`
+}
+
+func (a *API) clientDashboard(w http.ResponseWriter, r *http.Request) {
+	aggregates, err := a.store.ClientAggregates(r.Context(), time.Now().Add(-dashboardWindow(r.URL.Query().Get("window"))))
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	byID := make(map[string]clientDashboardItem, len(aggregates))
+	for _, aggregate := range aggregates {
+		byID[aggregate.ClientID] = clientDashboardItem{
+			ID: aggregate.ClientID, Name: aggregate.ClientName, Kind: "client",
+			Requests: aggregate.Requests, Successes: aggregate.Successes, Failures: aggregate.Failures, Failovers: aggregate.Failovers,
+			InputUncached: aggregate.InputUncached, CacheRead: aggregate.CacheRead, CacheWrite: aggregate.CacheWrite,
+			OutputTokens: aggregate.OutputTokens, UsageComplete: aggregate.UsageComplete, AvgLatencyMS: aggregate.AvgLatencyMS,
+		}
+	}
+	master := byID["master"]
+	master.ID, master.Name, master.Kind, master.Active = "master", "主访问密钥", "master", true
+	delete(byID, "master")
+	items := []clientDashboardItem{master}
+	for _, client := range a.identity.ListClientTokens() {
+		item := byID[client.ID]
+		item.ID, item.Name, item.Kind, item.Active, item.CreatedAt = client.ID, client.Name, "client", true, client.CreatedAt
+		items = append(items, item)
+		delete(byID, client.ID)
+	}
+	for _, item := range byID {
+		item.Kind = "client"
+		item.Active = false
+		items = append(items, item)
+	}
+	sort.SliceStable(items[1:], func(i, j int) bool {
+		return items[i+1].Name < items[j+1].Name
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"clients": items})
 }
 
 func clientProviders(baseURL string) map[string]any {

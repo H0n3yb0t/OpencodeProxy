@@ -35,6 +35,8 @@ type RequestRecord struct {
 	ID              string     `json:"id"`
 	StartedAt       time.Time  `json:"started_at"`
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	ClientID        string     `json:"client_id"`
+	ClientName      string     `json:"client_name"`
 	Protocol        string     `json:"protocol"`
 	Model           string     `json:"model"`
 	Stream          bool       `json:"stream"`
@@ -117,5 +119,20 @@ type KeyAggregate struct {
 	CacheRead     int64  `json:"cache_read"`
 	CacheWrite    int64  `json:"cache_write"`
 	OutputTokens  int64  `json:"output_tokens"`
+	AvgLatencyMS  int64  `json:"avg_latency_ms"`
+}
+
+type ClientAggregate struct {
+	ClientID      string `json:"client_id"`
+	ClientName    string `json:"client_name"`
+	Requests      int64  `json:"requests"`
+	Successes     int64  `json:"successes"`
+	Failures      int64  `json:"failures"`
+	Failovers     int64  `json:"failovers"`
+	InputUncached int64  `json:"input_uncached"`
+	CacheRead     int64  `json:"cache_read"`
+	CacheWrite    int64  `json:"cache_write"`
+	OutputTokens  int64  `json:"output_tokens"`
+	UsageComplete int64  `json:"usage_complete"`
 	AvgLatencyMS  int64  `json:"avg_latency_ms"`
 }

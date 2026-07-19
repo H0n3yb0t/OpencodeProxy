@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestInitializePersistsOnlyHashesAndReloads(t *testing.T) {
+func TestInitializePersistsUnifiedAccessKeyOnlyAsHashesAndReloads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "instance.json")
 	manager, err := Open(path, nil, "", "")
 	if err != nil {
@@ -19,24 +19,24 @@ func TestInitializePersistsOnlyHashesAndReloads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if secrets.AdminPassword == "" || secrets.ProxyToken == "" || secrets.RecoveryKey == "" {
+	if secrets.AccessKey == "" || secrets.RecoveryKey == "" {
 		t.Fatalf("missing secrets: %#v", secrets)
 	}
-	if !manager.VerifyAdmin(secrets.AdminPassword) || !manager.VerifyProxy(secrets.ProxyToken) {
+	if !manager.VerifyAdmin(secrets.AccessKey) || !manager.VerifyProxy(secrets.AccessKey) || !manager.UnifiedAccessEnabled() {
 		t.Fatal("generated credentials do not verify")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), secrets.AdminPassword) || strings.Contains(string(raw), secrets.ProxyToken) {
+	if strings.Contains(string(raw), secrets.AccessKey) {
 		t.Fatal("plaintext login credentials were persisted")
 	}
 	reloaded, err := Open(path, nil, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reloaded.VerifyAdmin(secrets.AdminPassword) || !reloaded.VerifyProxy(secrets.ProxyToken) {
+	if !reloaded.VerifyAdmin(secrets.AccessKey) || !reloaded.VerifyProxy(secrets.AccessKey) {
 		t.Fatal("credentials did not survive reload")
 	}
 	ciphertext, err := reloaded.Encrypt("upstream-key")
@@ -49,15 +49,39 @@ func TestInitializePersistsOnlyHashesAndReloads(t *testing.T) {
 	}
 }
 
-func TestRotateProxyTokenInvalidatesPreviousToken(t *testing.T) {
+func TestRotateAccessKeyInvalidatesPreviousMasterButKeepsClientTokens(t *testing.T) {
 	manager, _ := Open(filepath.Join(t.TempDir(), "instance.json"), nil, "", "")
 	secrets, _ := manager.Initialize()
-	rotated, err := manager.RotateProxyToken()
+	_, clientToken, _ := manager.IssueClientToken("client")
+	rotated, err := manager.RotateAccessKey("new-unified-access-key")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manager.VerifyProxy(secrets.ProxyToken) || !manager.VerifyProxy(rotated) {
-		t.Fatal("proxy token rotation did not take effect")
+	if manager.VerifyProxy(secrets.AccessKey) || manager.VerifyAdmin(secrets.AccessKey) || !manager.VerifyProxy(rotated) || !manager.VerifyAdmin(rotated) {
+		t.Fatal("access key rotation did not take effect")
+	}
+	if !manager.VerifyProxy(clientToken) {
+		t.Fatal("access key rotation invalidated an independent client token")
+	}
+}
+
+func TestLegacySeparateCredentialsRemainValidUntilUnified(t *testing.T) {
+	manager, err := Open(filepath.Join(t.TempDir(), "instance.json"), make([]byte, 32), "legacy-admin-password", "legacy-proxy-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager.UnifiedAccessEnabled() || !manager.VerifyAdmin("legacy-admin-password") || !manager.VerifyProxy("legacy-proxy-token") {
+		t.Fatal("legacy credentials were not preserved")
+	}
+	accessKey, err := manager.RotateAccessKey("new-unified-access-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !manager.UnifiedAccessEnabled() || !manager.VerifyAdmin(accessKey) || !manager.VerifyProxy(accessKey) {
+		t.Fatal("legacy credentials were not unified")
+	}
+	if manager.VerifyAdmin("legacy-admin-password") || manager.VerifyProxy("legacy-proxy-token") {
+		t.Fatal("legacy credentials remained valid after unification")
 	}
 }
 

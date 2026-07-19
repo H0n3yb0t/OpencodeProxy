@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS proxy_requests (
   id TEXT PRIMARY KEY,
   started_at TEXT NOT NULL,
   finished_at TEXT,
+  client_id TEXT NOT NULL DEFAULT 'master',
+  client_name TEXT NOT NULL DEFAULT '主访问密钥',
   protocol TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT '',
   stream INTEGER NOT NULL DEFAULT 0,
@@ -148,7 +150,53 @@ CREATE TABLE IF NOT EXISTS model_cache (
 	if err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "client_id", definition: "TEXT NOT NULL DEFAULT 'master'"},
+		{name: "client_name", definition: "TEXT NOT NULL DEFAULT '主访问密钥'"},
+	} {
+		if err := s.ensureColumn("proxy_requests", column.name, column.definition); err != nil {
+			return fmt.Errorf("migrate database: %w", err)
+		}
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_requests_client_started ON proxy_requests(client_id, started_at DESC)`); err != nil {
+		return fmt.Errorf("migrate database: %w", err)
+	}
 	return nil
+}
+
+func (s *Store) ensureColumn(table, column, definition string) error {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + definition)
+	return err
 }
 
 func nowText() string { return time.Now().UTC().Format(time.RFC3339Nano) }
@@ -353,7 +401,13 @@ func (s *Store) UpdateSettings(ctx context.Context, v Settings) error {
 }
 
 func (s *Store) BeginRequest(ctx context.Context, r RequestRecord) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO proxy_requests(id,started_at,protocol,model,stream,request_bytes,message_count,tool_count,usage_state) VALUES(?,?,?,?,?,?,?,?,?)`, r.ID, r.StartedAt.UTC().Format(time.RFC3339Nano), r.Protocol, r.Model, boolInt(r.Stream), r.RequestBytes, r.MessageCount, r.ToolCount, "unavailable")
+	if r.ClientID == "" {
+		r.ClientID = "master"
+	}
+	if r.ClientName == "" {
+		r.ClientName = "主访问密钥"
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO proxy_requests(id,started_at,client_id,client_name,protocol,model,stream,request_bytes,message_count,tool_count,usage_state) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, r.ID, r.StartedAt.UTC().Format(time.RFC3339Nano), r.ClientID, r.ClientName, r.Protocol, r.Model, boolInt(r.Stream), r.RequestBytes, r.MessageCount, r.ToolCount, "unavailable")
 	return err
 }
 
@@ -379,7 +433,7 @@ func (s *Store) RecentRequests(ctx context.Context, limit int, keyID int64, mode
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	query := `SELECT r.id,r.started_at,r.finished_at,r.protocol,r.model,r.stream,r.request_bytes,r.message_count,r.tool_count,r.final_key_id,COALESCE(k.name,''),r.attempt_count,r.http_status,r.outcome,r.error_class,r.latency_ms,r.ttft_ms,r.input_uncached,r.cache_read,r.cache_write,r.output_tokens,r.reasoning_tokens,r.total_input,r.usage_state FROM proxy_requests r LEFT JOIN keys k ON k.id=r.final_key_id WHERE 1=1`
+	query := `SELECT r.id,r.started_at,r.finished_at,r.client_id,r.client_name,r.protocol,r.model,r.stream,r.request_bytes,r.message_count,r.tool_count,r.final_key_id,COALESCE(k.name,''),r.attempt_count,r.http_status,r.outcome,r.error_class,r.latency_ms,r.ttft_ms,r.input_uncached,r.cache_read,r.cache_write,r.output_tokens,r.reasoning_tokens,r.total_input,r.usage_state FROM proxy_requests r LEFT JOIN keys k ON k.id=r.final_key_id WHERE 1=1`
 	var args []any
 	if keyID > 0 {
 		query += ` AND r.final_key_id=?`
@@ -402,7 +456,7 @@ func (s *Store) RecentRequests(ctx context.Context, limit int, keyID int64, mode
 		var started string
 		var finished sql.NullString
 		var stream int
-		if err := rows.Scan(&r.ID, &started, &finished, &r.Protocol, &r.Model, &stream, &r.RequestBytes, &r.MessageCount, &r.ToolCount, &r.FinalKeyID, &r.FinalKeyName, &r.AttemptCount, &r.HTTPStatus, &r.Outcome, &r.ErrorClass, &r.LatencyMS, &r.TTFTMS, &r.InputUncached, &r.CacheRead, &r.CacheWrite, &r.OutputTokens, &r.ReasoningTokens, &r.TotalInput, &r.UsageState); err != nil {
+		if err := rows.Scan(&r.ID, &started, &finished, &r.ClientID, &r.ClientName, &r.Protocol, &r.Model, &stream, &r.RequestBytes, &r.MessageCount, &r.ToolCount, &r.FinalKeyID, &r.FinalKeyName, &r.AttemptCount, &r.HTTPStatus, &r.Outcome, &r.ErrorClass, &r.LatencyMS, &r.TTFTMS, &r.InputUncached, &r.CacheRead, &r.CacheWrite, &r.OutputTokens, &r.ReasoningTokens, &r.TotalInput, &r.UsageState); err != nil {
 			return nil, err
 		}
 		r.StartedAt = parseTime(started)
@@ -411,6 +465,36 @@ func (s *Store) RecentRequests(ctx context.Context, limit int, keyID int64, mode
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) ClientAggregates(ctx context.Context, since time.Time) ([]ClientAggregate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT client_id,MAX(client_name),COUNT(*),
+  COALESCE(SUM(CASE WHEN outcome='success' THEN 1 ELSE 0 END),0),
+  COALESCE(SUM(CASE WHEN outcome!='' AND outcome!='success' THEN 1 ELSE 0 END),0),
+  COALESCE(SUM(CASE WHEN attempt_count>1 THEN 1 ELSE 0 END),0),
+  COALESCE(SUM(input_uncached),0),COALESCE(SUM(cache_read),0),COALESCE(SUM(cache_write),0),COALESCE(SUM(output_tokens),0),
+  COALESCE(SUM(CASE WHEN usage_state='complete' THEN 1 ELSE 0 END),0),
+  CAST(ROUND(COALESCE(AVG(CASE WHEN outcome!='' THEN latency_ms END),0)) AS INTEGER)
+FROM proxy_requests WHERE started_at>=? GROUP BY client_id ORDER BY COUNT(*) DESC,client_id`, since.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]ClientAggregate, 0)
+	for rows.Next() {
+		var item ClientAggregate
+		if err := rows.Scan(&item.ClientID, &item.ClientName, &item.Requests, &item.Successes, &item.Failures, &item.Failovers, &item.InputUncached, &item.CacheRead, &item.CacheWrite, &item.OutputTokens, &item.UsageComplete, &item.AvgLatencyMS); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) RenameRequestClient(ctx context.Context, id, name string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE proxy_requests SET client_name=? WHERE client_id=?`, name, id)
+	return err
 }
 
 func (s *Store) Dashboard(ctx context.Context, since time.Time) (Dashboard, error) {
@@ -457,7 +541,7 @@ func (s *Store) Dashboard(ctx context.Context, since time.Time) (Dashboard, erro
 		d.Timeline = append(d.Timeline, p)
 	}
 	rows.Close()
-	rows, err = s.db.QueryContext(ctx, `SELECT k.id,k.name,COUNT(r.id),SUM(CASE WHEN r.outcome='success' THEN 1 ELSE 0 END),COALESCE(SUM(r.input_uncached),0),COALESCE(SUM(r.cache_read),0),COALESCE(SUM(r.cache_write),0),COALESCE(SUM(r.output_tokens),0),COALESCE(AVG(r.latency_ms),0) FROM keys k LEFT JOIN proxy_requests r ON r.final_key_id=k.id AND r.started_at>=? GROUP BY k.id,k.name ORDER BY k.priority,k.id`, sinceText)
+	rows, err = s.db.QueryContext(ctx, `SELECT k.id,k.name,COUNT(r.id),SUM(CASE WHEN r.outcome='success' THEN 1 ELSE 0 END),COALESCE(SUM(r.input_uncached),0),COALESCE(SUM(r.cache_read),0),COALESCE(SUM(r.cache_write),0),COALESCE(SUM(r.output_tokens),0),CAST(ROUND(COALESCE(AVG(r.latency_ms),0)) AS INTEGER) FROM keys k LEFT JOIN proxy_requests r ON r.final_key_id=k.id AND r.started_at>=? GROUP BY k.id,k.name ORDER BY k.priority,k.id`, sinceText)
 	if err != nil {
 		return d, err
 	}

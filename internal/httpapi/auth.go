@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/H0n3yb0t/OpencodeProxy/internal/identity"
 )
 
 const sessionCookie = "opencodeproxy_session"
@@ -47,6 +49,12 @@ func (s *sessionStore) delete(token string) {
 	s.mu.Unlock()
 }
 
+func (s *sessionStore) reset() {
+	s.mu.Lock()
+	s.sessions = make(map[string]time.Time)
+	s.mu.Unlock()
+}
+
 func (a *API) adminAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.identity.Initialized() {
@@ -76,11 +84,12 @@ func (a *API) proxyAuth(next http.Handler) http.Handler {
 		if token == "" {
 			token = r.Header.Get("X-Api-Key")
 		}
-		if !a.identity.VerifyProxy(token) {
+		principal, ok := a.identity.AuthenticateProxy(token)
+		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]any{"message": "Invalid proxy token", "type": "authentication_error"}})
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(identity.WithProxyPrincipal(r.Context(), principal)))
 	})
 }
 

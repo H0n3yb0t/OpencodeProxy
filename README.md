@@ -13,6 +13,7 @@
 - 统计输入、输出、cache read、cache write、TTFT、延迟和故障转移
 - 最近 100 条请求流水，不保存 prompt 和模型输出
 - Web UI 生成一次性安装命令，自动配置 Windows、macOS 和 Linux 上的 OpenCode
+- 按客户端统计请求、输入输出与缓存用量，并支持独立客户端密钥的增删改
 - 单管理员 Web UI、SQLite 持久化、单容器部署
 
 ## Docker Compose 部署
@@ -23,17 +24,16 @@ docker compose up -d --build
 
 打开 `http://服务器地址:8080`，在首次运行页面点击“一键初始化”。OpencodeProxy 会自动生成：
 
-- 管理员密码
-- 客户端代理 token
-- 数据恢复密钥
+- 主访问密钥，同时用于面板登录和代理 API 鉴权
+- 数据恢复密钥，用于数据卷备份恢复
 
-三项凭据只在初始化结果页显示一次，可以一键复制或下载为文本文件。确认保存后直接进入控制台。
+两项凭据只在初始化结果页显示一次，可以一键复制或下载为文本文件。确认保存后直接进入控制台。
 
 应用监听 `0.0.0.0:8080`。公网部署必须配置 HTTPS 反向代理和防火墙。
 
 > 尚未初始化时，第一个访问初始化页面的人可以取得管理权。不要把全新实例直接暴露在不可信公网。初始化完成后，管理 UI 和推理 API 都需要鉴权。
 
-初始化是原子单次操作。完成后初始化接口关闭并返回 `404 Not Found`，已生成的凭据无法通过该接口再次读取或重置。主代理 token 只能由已登录管理员在设置页轮换；客户端接入页可以签发和撤销相互独立的客户端 token。
+初始化是原子单次操作。完成后初始化接口关闭并返回 `404 Not Found`，已生成的凭据无法通过该接口再次读取。主访问密钥可以由已登录管理员在设置页修改；客户端密钥不会随主访问密钥变化。客户端面板可以签发、重命名和撤销相互独立的客户端密钥。
 
 配置、加密主密钥和数据库保存在 Docker 数据卷 `opencodeproxy-data`。备份和迁移时应备份整个数据卷，并单独安全保存恢复密钥。
 
@@ -56,7 +56,9 @@ environment:
 
 ### 无人值守初始化
 
-自动化部署可以同时提供 `MASTER_KEY`、`ADMIN_PASSWORD` 和 `PROXY_TOKEN` 环境变量。`MASTER_KEY` 必须是 Base64 编码的 32 字节密钥；缺少其中任意一项都会导致服务拒绝启动。通过环境变量建立实例身份后，Web 初始化入口保持关闭。
+自动化部署可以同时提供 `MASTER_KEY` 和 `ACCESS_KEY` 环境变量。`MASTER_KEY` 必须是 Base64 编码的 32 字节数据加密密钥，`ACCESS_KEY` 同时用于面板登录和代理 API。通过环境变量建立实例身份后，Web 初始化入口保持关闭。
+
+旧版 `MASTER_KEY`、`ADMIN_PASSWORD`、`PROXY_TOKEN` 三变量组合仍可用于兼容升级，但不能与 `ACCESS_KEY` 混用。旧实例升级后原管理员密码和主代理 token 会继续工作；在设置页修改一次主访问密钥后，两者会统一，独立客户端密钥不受影响。
 
 ### Docker 镜像发布
 
@@ -68,7 +70,7 @@ GitHub Actions 工作流会将 `master` 分支的每次推送构建为 `h0n3yb0t
 
 ### OpenCode 一键配置
 
-登录 Web UI，进入“客户端接入”，填写客户端名称并选择操作系统。页面会生成一条 10 分钟有效、仅可执行一次的安装命令。安装器会：
+登录 Web UI，进入“客户端”，填写客户端名称并选择操作系统。页面会生成一条 10 分钟有效、仅可执行一次的安装命令。安装器会：
 
 - 自动定位 OpenCode 全局配置目录
 - 解析并备份现有 `opencode.json` 或 `opencode.jsonc`
@@ -76,9 +78,9 @@ GitHub Actions 工作流会将 `master` 分支的每次推送构建为 `h0n3yb0t
 - 将独立客户端 token 写入权限受限的 `opencodeproxy.token`，配置中通过 `{file:...}` 引用
 - 保留已有默认模型；未设置默认模型时使用 `mimo-v2.5`
 
-Windows 使用系统自带 PowerShell。macOS/Linux 需要 `curl` 和 Python 3。安装完成后重启 OpenCode，执行 `/models` 并选择 `OpencodeProxy`。每台客户端拥有独立凭证，可以从同一页面单独撤销，不影响主代理 token 或其他客户端。
+Windows 使用系统自带 PowerShell。macOS/Linux 需要 `curl` 和 Python 3。安装完成后重启 OpenCode，执行 `/models` 并选择 `OpencodeProxy`。每台客户端拥有独立凭证，可以从同一页面改名或撤销，不影响主访问密钥或其他客户端。客户端面板还会按 5 小时、24 小时、7 天和 30 天窗口统计每个客户端的请求、输入、输出、缓存命中与平均延迟。
 
-一次性安装凭证会出现在本机终端历史中，但它不包含长期代理 token，成功使用后立即失效，未使用时在 10 分钟后过期。
+一次性安装凭证会出现在本机终端历史中，但它不包含长期客户端密钥，成功使用后立即失效，未使用时在 10 分钟后过期。
 
 ### 通用 API 接入
 
@@ -86,21 +88,21 @@ OpenAI-compatible：
 
 ```text
 Base URL: http://服务器地址:8080/v1
-API Key:  初始化页面生成的代理 token
+API Key:  主访问密钥或客户端面板签发的独立密钥
 ```
 
 Anthropic-compatible：
 
 ```text
 Base URL: http://服务器地址:8080/v1
-API Key:  初始化页面生成的代理 token
+API Key:  主访问密钥或客户端面板签发的独立密钥
 ```
 
 示例：
 
 ```powershell
-$proxyToken = "粘贴初始化页面生成的代理 token"
-$headers = @{ Authorization = "Bearer $proxyToken" }
+$accessKey = "粘贴主访问密钥或客户端密钥"
+$headers = @{ Authorization = "Bearer $accessKey" }
 $body = @{
   model = "mimo-v2.5"
   messages = @(@{ role = "user"; content = "Reply with OK" })

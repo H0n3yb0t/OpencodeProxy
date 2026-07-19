@@ -73,10 +73,14 @@ func (a *API) Router() http.Handler {
 		admin.Post("/api/admin/keys/{id}/test", a.testKey)
 		admin.Get("/api/admin/settings", a.getSettings)
 		admin.Put("/api/admin/settings", a.updateSettings)
-		admin.Post("/api/admin/proxy-token/rotate", a.rotateProxyToken)
+		admin.Get("/api/admin/access-key", a.accessKeyStatus)
+		admin.Put("/api/admin/access-key", a.changeAccessKey)
 		admin.Get("/api/admin/client-tokens", a.listClientTokens)
+		admin.Post("/api/admin/client-tokens", a.createClientToken)
+		admin.Patch("/api/admin/client-tokens/{id}", a.renameClientToken)
 		admin.Post("/api/admin/client-enrollments", a.createClientEnrollment)
 		admin.Delete("/api/admin/client-tokens/{id}", a.revokeClientToken)
+		admin.Get("/api/admin/client-dashboard", a.clientDashboard)
 		admin.Get("/api/admin/requests", a.requests)
 		admin.Get("/api/admin/dashboard", a.dashboard)
 		admin.Get("/api/admin/stream", a.events)
@@ -144,14 +148,28 @@ func (a *API) setupInitialize(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"initialized": true, "secrets": secrets})
 }
 
-func (a *API) rotateProxyToken(w http.ResponseWriter, _ *http.Request) {
+func (a *API) accessKeyStatus(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"unified": a.identity.UnifiedAccessEnabled()})
+}
+
+func (a *API) changeAccessKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	token, err := a.identity.RotateProxyToken()
-	if err != nil {
-		serverError(w, err)
+	var input struct {
+		AccessKey string `json:"access_key"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"proxy_token": token})
+	accessKey, err := a.identity.RotateAccessKey(input.AccessKey)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	a.sessions.reset()
+	sessionToken := a.sessions.create()
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: sessionToken, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil, MaxAge: int((12 * time.Hour).Seconds())})
+	writeJSON(w, http.StatusOK, map[string]any{"access_key": accessKey, "unified": true})
 }
 func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
@@ -475,8 +493,18 @@ func (a *API) requests(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"requests": items})
 }
 func (a *API) dashboard(w http.ResponseWriter, r *http.Request) {
+	duration := dashboardWindow(r.URL.Query().Get("window"))
+	d, err := a.store.Dashboard(r.Context(), time.Now().Add(-duration))
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, 200, d)
+}
+
+func dashboardWindow(value string) time.Duration {
 	duration := 5 * time.Hour
-	switch r.URL.Query().Get("window") {
+	switch value {
 	case "24h":
 		duration = 24 * time.Hour
 	case "7d":
@@ -484,12 +512,7 @@ func (a *API) dashboard(w http.ResponseWriter, r *http.Request) {
 	case "30d":
 		duration = 30 * 24 * time.Hour
 	}
-	d, err := a.store.Dashboard(r.Context(), time.Now().Add(-duration))
-	if err != nil {
-		serverError(w, err)
-		return
-	}
-	writeJSON(w, 200, d)
+	return duration
 }
 func (a *API) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")

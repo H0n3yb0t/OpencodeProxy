@@ -21,6 +21,8 @@ type KeyItem = {
 type RequestItem = {
   id: string;
   started_at: string;
+  client_id: string;
+  client_name: string;
   protocol: string;
   model: string;
   stream: boolean;
@@ -78,8 +80,7 @@ type Settings = {
   models_cache_sec: number;
 };
 type SetupSecrets = {
-  admin_password: string;
-  proxy_token: string;
+  access_key: string;
   recovery_key: string;
 };
 type KeyImportResult = {
@@ -105,6 +106,23 @@ type ClientToken = {
 type ClientEnrollment = {
   ticket: string;
   expires_at: string;
+};
+type ClientDashboardItem = {
+  id: string;
+  name: string;
+  kind: "master" | "client";
+  active: boolean;
+  created_at?: string;
+  requests: number;
+  successes: number;
+  failures: number;
+  failovers: number;
+  input_uncached: number;
+  cache_read: number;
+  cache_write: number;
+  output_tokens: number;
+  usage_complete: number;
+  avg_latency_ms: number;
 };
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -198,8 +216,7 @@ function Setup({ onComplete }: { onComplete: () => void }) {
     ? [
         "OpencodeProxy initialization credentials",
         `URL: ${location.origin}`,
-        `Admin password: ${secrets.admin_password}`,
-        `Proxy token: ${secrets.proxy_token}`,
+        `Master access key: ${secrets.access_key}`,
         `Recovery key: ${secrets.recovery_key}`,
         "",
         "Keep this file private. These values will not be shown again.",
@@ -225,7 +242,7 @@ function Setup({ onComplete }: { onComplete: () => void }) {
           <p className="eyebrow">FIRST RUN SETUP</p>
           <h1>初始化 OpencodeProxy</h1>
           <p className="muted setup-copy">
-            系统将生成并保存加密主密钥、管理员密码和代理 token。
+            系统将生成主访问密钥和数据恢复密钥。主访问密钥同时用于登录面板和调用代理 API。
           </p>
           <div className="setup-notice">
             尚未初始化的服务由第一个访问者取得管理权。请只在可信网络完成此步骤。
@@ -246,13 +263,11 @@ function Setup({ onComplete }: { onComplete: () => void }) {
         <p className="eyebrow">INITIALIZATION COMPLETE</p>
         <h1>请保存一次性凭据</h1>
         <p className="muted setup-copy">
-          管理员密码和代理 token
-          只在此页面显示一次。恢复密钥用于数据卷备份恢复。
+          主访问密钥只在此页面显示一次。恢复密钥用于数据卷备份恢复。
         </p>
         <div className="secret-list">
           {[
-            ["管理员密码", secrets.admin_password],
-            ["代理 Token", secrets.proxy_token],
+            ["主访问密钥", secrets.access_key],
             ["恢复密钥", secrets.recovery_key],
           ].map(([label, value]) => (
             <div className="secret-row" key={label}>
@@ -311,13 +326,13 @@ function Login({ onLogin }: { onLogin: () => void }) {
         <p className="muted">故障转移、额度恢复与缓存效率，一处掌握。</p>
         <form onSubmit={submit}>
           <label>
-            管理员密码
+            主访问密钥
             <input
               autoFocus
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="输入初始化时生成的管理员密码"
+              placeholder="输入初始化时生成的主访问密钥"
             />
           </label>
           {error && <p className="form-error">{error}</p>}
@@ -382,7 +397,7 @@ function App() {
             ["dashboard", "总览", "01"],
             ["keys", "密钥池", "02"],
             ["requests", "请求流水", "03"],
-            ["clients", "客户端接入", "04"],
+            ["clients", "客户端", "04"],
             ["settings", "设置", "05"],
           ].map(([id, label, num]) => (
             <a key={id} className={page === id ? "active" : ""} href={`#${id}`}>
@@ -1020,7 +1035,9 @@ function Requests({ refresh }: { refresh: number }) {
                 <tr key={item.id}>
                   <td>
                     <strong>{formatDate(item.started_at)}</strong>
-                    <small>{item.id.slice(0, 12)}</small>
+                    <small>
+                      {item.id.slice(0, 12)} · {item.client_name || "主访问密钥"}
+                    </small>
                   </td>
                   <td>
                     <strong>{item.model || "—"}</strong>
@@ -1071,36 +1088,41 @@ function Requests({ refresh }: { refresh: number }) {
 
 function ClientsPage() {
   const [name, setName] = useState("我的 OpenCode 客户端");
+  const [manualName, setManualName] = useState("");
   const [platform, setPlatform] = useState<"powershell" | "shell">(
     /Windows/i.test(navigator.userAgent) ? "powershell" : "shell",
   );
+  const [windowName, setWindowName] = useState("5h");
   const [enrollment, setEnrollment] = useState<ClientEnrollment | null>(null);
-  const [tokens, setTokens] = useState<ClientToken[]>([]);
+  const [clients, setClients] = useState<ClientDashboardItem[]>([]);
+  const [issuedToken, setIssuedToken] = useState<{ name: string; token: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
-  const loadTokens = useCallback(() => {
-    api<{ tokens: ClientToken[] }>("/api/admin/client-tokens")
-      .then((result) => setTokens(result.tokens || []))
+  const loadClients = useCallback(() => {
+    api<{ clients: ClientDashboardItem[] }>(
+      `/api/admin/client-dashboard?window=${windowName}`,
+    )
+      .then((result) => setClients(result.clients || []))
       .catch((error) => setMessage((error as Error).message));
-  }, []);
+  }, [windowName]);
 
-  useEffect(() => loadTokens(), [loadTokens]);
+  useEffect(() => loadClients(), [loadClients]);
   useEffect(() => {
-    if (!enrollment) return;
-    const timer = setInterval(loadTokens, 4000);
+    const timer = setInterval(loadClients, 5000);
     return () => clearInterval(timer);
-  }, [enrollment, loadTokens]);
+  }, [loadClients]);
 
   const generate = async () => {
     setBusy(true);
     setMessage("");
     try {
-      const result = await api<ClientEnrollment>(
-        "/api/admin/client-enrollments",
-        { method: "POST", body: JSON.stringify({ name }) },
+      setEnrollment(
+        await api<ClientEnrollment>("/api/admin/client-enrollments", {
+          method: "POST",
+          body: JSON.stringify({ name }),
+        }),
       );
-      setEnrollment(result);
     } catch (error) {
       setMessage((error as Error).message);
     } finally {
@@ -1108,11 +1130,43 @@ function ClientsPage() {
     }
   };
 
-  const revoke = async (token: ClientToken) => {
-    if (!confirm(`撤销“${token.name}”的代理访问权限？`)) return;
+  const createManual = async () => {
+    setBusy(true);
+    setMessage("");
     try {
-      await api(`/api/admin/client-tokens/${token.id}`, { method: "DELETE" });
-      loadTokens();
+      const result = await api<{ client: ClientToken; proxy_token: string }>(
+        "/api/admin/client-tokens",
+        { method: "POST", body: JSON.stringify({ name: manualName }) },
+      );
+      setIssuedToken({ name: result.client.name, token: result.proxy_token });
+      setManualName("");
+      loadClients();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rename = async (client: ClientDashboardItem) => {
+    const next = prompt("新的客户端名称", client.name)?.trim();
+    if (!next || next === client.name) return;
+    try {
+      await api(`/api/admin/client-tokens/${client.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: next }),
+      });
+      loadClients();
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  };
+
+  const revoke = async (client: ClientDashboardItem) => {
+    if (!confirm(`删除“${client.name}”？该客户端密钥会立即失效，历史统计会保留。`)) return;
+    try {
+      await api(`/api/admin/client-tokens/${client.id}`, { method: "DELETE" });
+      loadClients();
     } catch (error) {
       setMessage((error as Error).message);
     }
@@ -1126,111 +1180,132 @@ function ClientsPage() {
       ? `& ([scriptblock]::Create((Invoke-RestMethod '${psQuote(origin)}/api/client/install.ps1'))) -Server '${psQuote(origin)}' -Ticket '${psQuote(enrollment.ticket)}'`
       : `curl -fsSL '${shQuote(origin)}/api/client/install.sh' | sh -s -- '${shQuote(origin)}' '${shQuote(enrollment.ticket)}'`
     : "";
+  const totals = clients.reduce(
+    (sum, client) => ({
+      requests: sum.requests + client.requests,
+      input: sum.input + client.input_uncached + client.cache_read + client.cache_write,
+      output: sum.output + client.output_tokens,
+      cacheRead: sum.cacheRead + client.cache_read,
+    }),
+    { requests: 0, input: 0, output: 0, cacheRead: 0 },
+  );
 
   return (
     <>
-      <PageHead kicker="CLIENT ONBOARDING" title="客户端接入" />
+      <PageHead kicker="CLIENT OPERATIONS" title="客户端面板">
+        <div className="segmented">
+          {["5h", "24h", "7d", "30d"].map((value) => (
+            <button
+              className={windowName === value ? "selected" : ""}
+              onClick={() => setWindowName(value)}
+              key={value}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+      </PageHead>
+      <section className="stats-grid client-stats">
+        <Stat label="客户端" value={clients.filter((v) => v.kind === "client" && v.active).length} detail="当前有效凭证" />
+        <Stat label="请求" value={totals.requests} detail={`统计窗口 ${windowName}`} />
+        <Stat label="输入 TOKEN" value={formatTokens(totals.input)} detail={`${formatTokens(totals.cacheRead)} cache read`} tone="mint" />
+        <Stat label="输出 TOKEN" value={formatTokens(totals.output)} detail="所有客户端合计" />
+      </section>
       <section className="client-grid">
         <article className="panel client-installer">
           <div className="panel-head">
             <div>
               <h3>一键配置 OpenCode</h3>
-              <p className="muted">
-                自动备份并合并全局配置，同时安装 OpenAI 与 Anthropic 两组模型。
-              </p>
+              <p className="muted">自动备份并合并全局配置，同时安装两组模型。</p>
             </div>
           </div>
           <label>
             客户端名称
-            <input
-              value={name}
-              maxLength={80}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="例如：办公室 Windows"
-            />
+            <input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
           </label>
           <div className="platform-tabs">
-            <button
-              className={platform === "powershell" ? "active" : ""}
-              onClick={() => setPlatform("powershell")}
-            >
-              Windows PowerShell
-            </button>
-            <button
-              className={platform === "shell" ? "active" : ""}
-              onClick={() => setPlatform("shell")}
-            >
-              macOS / Linux
-            </button>
+            <button className={platform === "powershell" ? "active" : ""} onClick={() => setPlatform("powershell")}>Windows PowerShell</button>
+            <button className={platform === "shell" ? "active" : ""} onClick={() => setPlatform("shell")}>macOS / Linux</button>
           </div>
           {!enrollment ? (
-            <button
-              className="primary"
-              disabled={busy || !name.trim()}
-              onClick={generate}
-            >
+            <button className="primary" disabled={busy || !name.trim()} onClick={generate}>
               {busy ? "正在生成…" : "生成一次性安装命令"}
             </button>
           ) : (
             <div className="install-command">
               <div className="command-meta">
-                <strong>
-                  复制到{platform === "powershell" ? " PowerShell" : "终端"}执行
-                </strong>
-                <span>一次性凭证，{countdown(enrollment.expires_at)}后失效</span>
+                <strong>复制到{platform === "powershell" ? " PowerShell" : "终端"}执行</strong>
+                <span>{countdown(enrollment.expires_at)}后失效</span>
               </div>
               <code>{command}</code>
               <div className="command-actions">
-                <button
-                  className="primary compact"
-                  onClick={() => copyText(command)}
-                >
-                  复制命令
-                </button>
-                <button
-                  className="secondary compact"
-                  onClick={generate}
-                  disabled={busy}
-                >
-                  重新生成
-                </button>
+                <button className="primary compact" onClick={() => copyText(command)}>复制命令</button>
+                <button className="secondary compact" onClick={generate} disabled={busy}>重新生成</button>
               </div>
             </div>
           )}
-          <ul className="installer-notes">
-            <li>长期代理 token 不会出现在命令或浏览器中；安装时签发独立客户端 token。</li>
-            <li>现有配置会先生成带时间戳的备份，再合并 OpencodeProxy Provider。</li>
-            <li>macOS/Linux 安装器使用 Python 3 安全解析 JSON/JSONC。</li>
-          </ul>
         </article>
 
-        <article className="panel client-list">
-          <div className="panel-head">
-            <div>
-              <h3>已接入客户端</h3>
-              <p className="muted">每台客户端拥有独立凭证，可单独撤销。</p>
-            </div>
-            <button className="secondary compact" onClick={loadTokens}>
-              刷新
-            </button>
-          </div>
-          <div className="client-token-list">
-            {tokens.map((token) => (
-              <div className="client-token" key={token.id}>
-                <div>
-                  <strong>{token.name}</strong>
-                  <span>创建于 {formatDate(token.created_at)}</span>
-                </div>
-                <button className="danger compact" onClick={() => revoke(token)}>
-                  撤销
-                </button>
+        <article className="panel manual-client">
+          <h3>手动添加客户端</h3>
+          <p className="muted">为其他程序签发独立 API key，不修改任何本机配置。</p>
+          <label>
+            客户端名称
+            <input value={manualName} maxLength={80} onChange={(event) => setManualName(event.target.value)} placeholder="例如：CI Runner" />
+          </label>
+          <button className="primary" disabled={busy || !manualName.trim()} onClick={createManual}>生成客户端密钥</button>
+          {issuedToken && (
+            <div className="rotated-token manual-token">
+              <div>
+                <strong>{issuedToken.name}（仅显示一次）</strong>
+                <code>{issuedToken.token}</code>
               </div>
-            ))}
-            {!tokens.length && (
-              <div className="empty-state">尚未通过一键命令接入客户端。</div>
-            )}
-          </div>
+              <button onClick={() => copyText(issuedToken.token)}>复制</button>
+            </div>
+          )}
         </article>
+      </section>
+
+      <section className="panel client-performance-panel">
+        <div className="panel-head">
+          <div>
+            <p className="eyebrow">CLIENT USAGE</p>
+            <h3>每客户端视角</h3>
+          </div>
+          <span className="muted">修改名称只影响显示；删除会立即撤销密钥</span>
+        </div>
+        <div className="client-performance">
+          {clients.map((client) => {
+            const input = client.input_uncached + client.cache_read + client.cache_write;
+            const hit = input ? (client.cache_read / input) * 100 : 0;
+            return (
+              <div className={`client-performance-row ${client.active ? "" : "inactive"}`} key={client.id}>
+                <div className="client-identity">
+                  <strong>{client.name}</strong>
+                  <span>{client.kind === "master" ? "主密钥" : client.active ? "有效" : "已删除"}</span>
+                </div>
+                <div>
+                  <small>REQUESTS</small>
+                  <strong>{client.requests}</strong>
+                  <span>{client.failures} failed</span>
+                </div>
+                <div><small>INPUT</small><strong>{formatTokens(input)}</strong></div>
+                <div><small>CACHE HIT</small><strong>{hit.toFixed(1)}%</strong></div>
+                <div><small>OUTPUT</small><strong>{formatTokens(client.output_tokens)}</strong></div>
+                <div><small>FAILOVER</small><strong>{client.failovers}</strong></div>
+                <div><small>AVG LATENCY</small><strong>{client.avg_latency_ms} ms</strong></div>
+                <div className="client-row-actions">
+                  {client.kind === "client" && client.active && (
+                    <>
+                      <button onClick={() => rename(client)}>改名</button>
+                      <button className="danger" onClick={() => revoke(client)}>删除</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </section>
       {message && <div className="toast">{message}</div>}
     </>
@@ -1240,9 +1315,14 @@ function ClientsPage() {
 function SettingsPage() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saved, setSaved] = useState("");
-  const [rotatedToken, setRotatedToken] = useState("");
+  const [newAccessKey, setNewAccessKey] = useState("");
+  const [shownAccessKey, setShownAccessKey] = useState("");
+  const [unifiedAccess, setUnifiedAccess] = useState<boolean | null>(null);
   useEffect(() => {
     api<Settings>("/api/admin/settings").then(setSettings);
+    api<{ unified: boolean }>("/api/admin/access-key").then((value) =>
+      setUnifiedAccess(value.unified),
+    );
   }, []);
   if (!settings) return <div className="loading">载入设置…</div>;
   const save = async () => {
@@ -1258,14 +1338,21 @@ function SettingsPage() {
       setSaved((e as Error).message);
     }
   };
-  const rotateToken = async () => {
-    if (!confirm("轮换后，旧代理 token 会立即失效。继续吗？")) return;
+  const changeAccessKey = async () => {
+    if (
+      !confirm(
+        "修改后，旧管理员密码和旧主代理 token 会立即失效；独立客户端密钥保持不变。继续吗？",
+      )
+    )
+      return;
     try {
-      const result = await api<{ proxy_token: string }>(
-        "/api/admin/proxy-token/rotate",
-        { method: "POST" },
+      const result = await api<{ access_key: string; unified: boolean }>(
+        "/api/admin/access-key",
+        { method: "PUT", body: JSON.stringify({ access_key: newAccessKey }) },
       );
-      setRotatedToken(result.proxy_token);
+      setShownAccessKey(result.access_key);
+      setNewAccessKey("");
+      setUnifiedAccess(result.unified);
     } catch (e) {
       setSaved((e as Error).message);
     }
@@ -1346,9 +1433,29 @@ function SettingsPage() {
         </article>
         <article className="panel deployment">
           <div className="panel-head">
-            <h3>接入信息</h3>
-            <button className="secondary compact" onClick={rotateToken}>
-              轮换代理 Token
+            <h3>主访问密钥与接入信息</h3>
+            <span className={`access-state ${unifiedAccess ? "unified" : "legacy"}`}>
+              {unifiedAccess ? "已统一" : "待统一"}
+            </span>
+          </div>
+          {unifiedAccess === false && (
+            <p className="setup-notice access-notice">
+              这是旧版本升级实例。当前管理员密码和主代理 token 仍分别有效；在下方修改一次后会统一为同一条主访问密钥。
+            </p>
+          )}
+          <div className="access-key-editor">
+            <label>
+              新主访问密钥
+              <input
+                type="password"
+                value={newAccessKey}
+                onChange={(event) => setNewAccessKey(event.target.value)}
+                placeholder="留空则由服务端随机生成"
+              />
+              <small>长度 16–256 个字符，同时用于面板登录和主 API 鉴权。</small>
+            </label>
+            <button className="secondary" onClick={changeAccessKey}>
+              {newAccessKey ? "保存新主密钥" : "随机生成并更换"}
             </button>
           </div>
           <dl>
@@ -1362,20 +1469,20 @@ function SettingsPage() {
             </div>
             <div>
               <dt>鉴权</dt>
-              <dd>Authorization: Bearer &lt;PROXY_TOKEN&gt;</dd>
+              <dd>Authorization: Bearer &lt;主访问密钥或客户端密钥&gt;</dd>
             </div>
             <div>
               <dt>监听</dt>
               <dd>0.0.0.0:8080</dd>
             </div>
           </dl>
-          {rotatedToken && (
+          {shownAccessKey && (
             <div className="rotated-token">
               <div>
-                <strong>新代理 Token（仅显示一次）</strong>
-                <code>{rotatedToken}</code>
+                <strong>新主访问密钥（请立即保存）</strong>
+                <code>{shownAccessKey}</code>
               </div>
-              <button onClick={() => copyText(rotatedToken)}>复制</button>
+              <button onClick={() => copyText(shownAccessKey)}>复制</button>
             </div>
           )}
         </article>

@@ -835,6 +835,10 @@ td small {
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
   gap: 14px;
 }
+.client-stats {
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: 14px;
+}
 .client-grid .panel {
   margin: 0;
 }
@@ -846,6 +850,18 @@ td small {
   margin: 7px 0 0;
   font-size: 11px;
   line-height: 1.6;
+}
+.manual-client > p {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.manual-token {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.manual-token code {
+  overflow-wrap: anywhere;
 }
 .platform-tabs {
   display: flex;
@@ -945,6 +961,66 @@ td small {
   text-align: center;
   font-size: 11px;
 }
+.client-performance-panel {
+  overflow: hidden;
+}
+.client-performance {
+  margin-top: 18px;
+  overflow-x: auto;
+}
+.client-performance-row {
+  min-width: 980px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1.5fr) repeat(6, minmax(90px, 0.75fr)) minmax(105px, auto);
+  align-items: center;
+  gap: 12px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+.client-performance-row:last-child {
+  border-bottom: 0;
+}
+.client-performance-row.inactive {
+  opacity: 0.5;
+}
+.client-performance-row > div {
+  display: grid;
+  gap: 5px;
+}
+.client-performance-row small,
+.client-performance-row span {
+  color: var(--muted);
+  font-size: 9px;
+}
+.client-performance-row strong {
+  font-size: 12px;
+}
+.client-identity span {
+  width: max-content;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #1d242c;
+}
+.client-row-actions {
+  display: flex !important;
+  grid-auto-flow: column;
+  justify-content: end;
+  gap: 6px !important;
+}
+.client-row-actions button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #171b22;
+  color: #cbd1da;
+  padding: 7px 9px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.client-row-actions button.danger {
+  border-color: #553038;
+  background: #25161a;
+  color: var(--danger);
+}
 .settings-grid .panel {
   margin: 0;
 }
@@ -1004,6 +1080,36 @@ td small {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0 30px;
+}
+.access-state {
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+}
+.access-state.unified {
+  background: #14251f;
+  color: var(--mint);
+}
+.access-state.legacy {
+  background: #2a2114;
+  color: var(--amber);
+}
+.access-notice {
+  margin: 18px 0 0;
+}
+.access-key-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--line);
+}
+.access-key-editor label {
+  margin-bottom: 0;
+}
+.access-key-editor button {
+  margin-bottom: 1px;
 }
 .deployment dl div {
   padding: 14px 0;
@@ -1123,6 +1229,12 @@ dd {
     grid-template-columns: 1fr;
   }
   .client-grid {
+    grid-template-columns: 1fr;
+  }
+  .client-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+  .access-key-editor {
     grid-template-columns: 1fr;
   }
   .deployment {

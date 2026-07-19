@@ -60,7 +60,8 @@ func (s *Service) HandleInference(protocol string) http.HandlerFunc {
 		if protocol == "openai" && meta.Stream && settings.ForceStreamUsage {
 			body = ensureStreamUsage(body)
 		}
-		record := store.RequestRecord{ID: requestID, StartedAt: started, Protocol: protocol, Model: meta.Model, Stream: meta.Stream, RequestBytes: int64(len(body)), MessageCount: meta.MessageCount, ToolCount: meta.ToolCount}
+		principal := identity.ProxyPrincipalFromContext(r.Context())
+		record := store.RequestRecord{ID: requestID, StartedAt: started, ClientID: principal.ID, ClientName: principal.Name, Protocol: protocol, Model: meta.Model, Stream: meta.Stream, RequestBytes: int64(len(body)), MessageCount: meta.MessageCount, ToolCount: meta.ToolCount}
 		if err := s.store.BeginRequest(r.Context(), record); err != nil {
 			slog.Error("begin request telemetry", "error", err)
 		}

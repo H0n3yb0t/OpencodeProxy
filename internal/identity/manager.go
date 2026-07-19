@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -23,9 +24,8 @@ import (
 var ErrAlreadyInitialized = errors.New("instance is already initialized")
 
 type Secrets struct {
-	AdminPassword string `json:"admin_password"`
-	ProxyToken    string `json:"proxy_token"`
-	RecoveryKey   string `json:"recovery_key"`
+	AccessKey   string `json:"access_key"`
+	RecoveryKey string `json:"recovery_key"`
 }
 
 type diskState struct {
@@ -33,6 +33,7 @@ type diskState struct {
 	MasterKey         string             `json:"master_key"`
 	AdminPasswordHash string             `json:"admin_password_hash"`
 	ProxyTokenHash    string             `json:"proxy_token_hash"`
+	UnifiedAccess     bool               `json:"unified_access,omitempty"`
 	ClientTokens      []clientTokenState `json:"client_tokens,omitempty"`
 	CreatedAt         time.Time          `json:"created_at"`
 	UpdatedAt         time.Time          `json:"updated_at"`
@@ -42,6 +43,25 @@ type ClientToken struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type ProxyPrincipal struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+type proxyPrincipalContextKey struct{}
+
+func WithProxyPrincipal(ctx context.Context, principal ProxyPrincipal) context.Context {
+	return context.WithValue(ctx, proxyPrincipalContextKey{}, principal)
+}
+
+func ProxyPrincipalFromContext(ctx context.Context) ProxyPrincipal {
+	if principal, ok := ctx.Value(proxyPrincipalContextKey{}).(ProxyPrincipal); ok {
+		return principal
+	}
+	return ProxyPrincipal{ID: "master", Name: "主访问密钥", Kind: "master"}
 }
 
 type clientTokenState struct {
@@ -89,6 +109,7 @@ func Open(path string, legacyMasterKey []byte, legacyAdminPassword, legacyProxyT
 		MasterKey:         base64.StdEncoding.EncodeToString(legacyMasterKey),
 		AdminPasswordHash: adminHash,
 		ProxyTokenHash:    tokenHash(legacyProxyToken),
+		UnifiedAccess:     legacyAdminPassword == legacyProxyToken,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -117,17 +138,12 @@ func (m *Manager) Initialize() (Secrets, error) {
 	if err != nil {
 		return Secrets{}, err
 	}
-	adminRaw, err := randomBytes(18)
+	accessRaw, err := randomBytes(32)
 	if err != nil {
 		return Secrets{}, err
 	}
-	proxyRaw, err := randomBytes(32)
-	if err != nil {
-		return Secrets{}, err
-	}
-	adminPassword := "op_" + base64.RawURLEncoding.EncodeToString(adminRaw)
-	proxyToken := "opool_" + base64.RawURLEncoding.EncodeToString(proxyRaw)
-	adminHash, err := hashPassword(adminPassword)
+	accessKey := "opm_" + base64.RawURLEncoding.EncodeToString(accessRaw)
+	adminHash, err := hashPassword(accessKey)
 	if err != nil {
 		return Secrets{}, err
 	}
@@ -136,7 +152,8 @@ func (m *Manager) Initialize() (Secrets, error) {
 		Version:           1,
 		MasterKey:         base64.StdEncoding.EncodeToString(master),
 		AdminPasswordHash: adminHash,
-		ProxyTokenHash:    tokenHash(proxyToken),
+		ProxyTokenHash:    tokenHash(accessKey),
+		UnifiedAccess:     true,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -150,7 +167,7 @@ func (m *Manager) Initialize() (Secrets, error) {
 		m.state, m.cipher = nil, nil
 		return Secrets{}, err
 	}
-	return Secrets{AdminPassword: adminPassword, ProxyToken: proxyToken, RecoveryKey: m.state.MasterKey}, nil
+	return Secrets{AccessKey: accessKey, RecoveryKey: m.state.MasterKey}, nil
 }
 
 func (m *Manager) VerifyAdmin(password string) bool {
@@ -163,21 +180,26 @@ func (m *Manager) VerifyAdmin(password string) bool {
 }
 
 func (m *Manager) VerifyProxy(token string) bool {
+	_, ok := m.AuthenticateProxy(token)
+	return ok
+}
+
+func (m *Manager) AuthenticateProxy(token string) (ProxyPrincipal, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if m.state == nil {
-		return false
+		return ProxyPrincipal{}, false
 	}
 	got := sha256.Sum256([]byte(token))
 	if hashMatches(got[:], m.state.ProxyTokenHash) {
-		return true
+		return ProxyPrincipal{ID: "master", Name: "主访问密钥", Kind: "master"}, true
 	}
 	for _, client := range m.state.ClientTokens {
 		if hashMatches(got[:], client.TokenHash) {
-			return true
+			return ProxyPrincipal{ID: client.ID, Name: client.Name, Kind: "client"}, true
 		}
 	}
-	return false
+	return ProxyPrincipal{}, false
 }
 
 func hashMatches(got []byte, encoded string) bool {
@@ -203,25 +225,43 @@ func (m *Manager) Decrypt(ciphertext []byte) (string, error) {
 	return m.cipher.Decrypt(ciphertext)
 }
 
-func (m *Manager) RotateProxyToken() (string, error) {
+func (m *Manager) RotateAccessKey(requested string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.state == nil {
 		return "", errors.New("instance setup is required")
 	}
-	raw, err := randomBytes(32)
+	accessKey := strings.TrimSpace(requested)
+	if accessKey == "" {
+		raw, err := randomBytes(32)
+		if err != nil {
+			return "", err
+		}
+		accessKey = "opm_" + base64.RawURLEncoding.EncodeToString(raw)
+	}
+	if len([]rune(accessKey)) < 16 || len([]rune(accessKey)) > 256 {
+		return "", errors.New("access key must contain 16 to 256 characters")
+	}
+	adminHash, err := hashPassword(accessKey)
 	if err != nil {
 		return "", err
 	}
-	token := "opool_" + base64.RawURLEncoding.EncodeToString(raw)
-	oldHash, oldUpdated := m.state.ProxyTokenHash, m.state.UpdatedAt
-	m.state.ProxyTokenHash = tokenHash(token)
+	oldAdminHash, oldProxyHash, oldUnified, oldUpdated := m.state.AdminPasswordHash, m.state.ProxyTokenHash, m.state.UnifiedAccess, m.state.UpdatedAt
+	m.state.AdminPasswordHash = adminHash
+	m.state.ProxyTokenHash = tokenHash(accessKey)
+	m.state.UnifiedAccess = true
 	m.state.UpdatedAt = time.Now().UTC()
 	if err := m.persistLocked(); err != nil {
-		m.state.ProxyTokenHash, m.state.UpdatedAt = oldHash, oldUpdated
+		m.state.AdminPasswordHash, m.state.ProxyTokenHash, m.state.UnifiedAccess, m.state.UpdatedAt = oldAdminHash, oldProxyHash, oldUnified, oldUpdated
 		return "", err
 	}
-	return token, nil
+	return accessKey, nil
+}
+
+func (m *Manager) UnifiedAccessEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.state != nil && m.state.UnifiedAccess
 }
 
 func (m *Manager) IssueClientToken(name string) (ClientToken, string, error) {
@@ -279,6 +319,31 @@ func (m *Manager) ListClientTokens() []ClientToken {
 		result[i] = ClientToken{ID: client.ID, Name: client.Name, CreatedAt: client.CreatedAt}
 	}
 	return result
+}
+
+func (m *Manager) RenameClientToken(id, name string) (ClientToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	name = strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) > 80 {
+		return ClientToken{}, errors.New("client name must contain 1 to 80 characters")
+	}
+	for index := range m.state.ClientTokens {
+		if m.state.ClientTokens[index].ID != id {
+			continue
+		}
+		previousName, previousUpdatedAt := m.state.ClientTokens[index].Name, m.state.UpdatedAt
+		m.state.ClientTokens[index].Name = name
+		m.state.UpdatedAt = time.Now().UTC()
+		if err := m.persistLocked(); err != nil {
+			m.state.ClientTokens[index].Name = previousName
+			m.state.UpdatedAt = previousUpdatedAt
+			return ClientToken{}, err
+		}
+		client := m.state.ClientTokens[index]
+		return ClientToken{ID: client.ID, Name: client.Name, CreatedAt: client.CreatedAt}, nil
+	}
+	return ClientToken{}, os.ErrNotExist
 }
 
 func (m *Manager) RevokeClientToken(id string) error {
