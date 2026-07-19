@@ -19,14 +19,16 @@ FROM alpine:3.22
 LABEL org.opencontainers.image.title="OpencodeProxy" \
       org.opencontainers.image.source="https://github.com/H0n3yb0t/OpencodeProxy" \
       org.opencontainers.image.description="OpenCode Go failover proxy and key pool"
-RUN apk add --no-cache ca-certificates tzdata && addgroup -S opencodeproxy && adduser -S -G opencodeproxy -h /app opencodeproxy
+RUN apk add --no-cache ca-certificates tzdata su-exec \
+    && addgroup -S -g 10001 opencodeproxy \
+    && adduser -S -u 10001 -G opencodeproxy -h /app opencodeproxy
 WORKDIR /app
 COPY --from=go-build /out/opencodeproxy /app/opencodeproxy
 COPY --from=web-build /src/web/dist /app/web
-RUN mkdir -p /data && chown opencodeproxy:opencodeproxy /data /app
-USER opencodeproxy
-ENV LISTEN_ADDR=0.0.0.0:8080 DATABASE_PATH=/data/opencodeproxy.db INSTANCE_PATH=/data/instance.json WEB_DIR=/app/web
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh && mkdir -p /data && chown opencodeproxy:opencodeproxy /data /app
+ENV LISTEN_ADDR=0.0.0.0:8080 DATABASE_PATH=/data/opencodeproxy.db INSTANCE_PATH=/data/instance.json WEB_DIR=/app/web PUID=10001 PGID=10001
 EXPOSE 8080
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/health/ready || exit 1
-ENTRYPOINT ["/app/opencodeproxy"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

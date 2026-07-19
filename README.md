@@ -36,6 +36,23 @@ docker compose up -d --build
 
 配置、加密主密钥和数据库保存在 Docker 数据卷 `opencodeproxy-data`。备份和迁移时应备份整个数据卷，并单独安全保存恢复密钥。
 
+也可以将宿主机目录绑定到 `/data`：
+
+```yaml
+volumes:
+  - ./data:/data
+```
+
+容器启动时会校正该目录的所有权，然后以非 root 用户运行服务。默认 UID/GID 均为 `10001`。NAS 目录使用特定所有者时，可以通过 `PUID` 和 `PGID` 指定运行身份：
+
+```yaml
+environment:
+  PUID: "1000"
+  PGID: "1000"
+```
+
+绑定目录所在的文件系统必须允许对应 UID/GID 写入。NFS root-squash 等不允许容器执行 `chown` 的存储，应先将目录递归设置为 `PUID:PGID`，或使用默认 Docker 命名卷。
+
 ### 无人值守初始化
 
 自动化部署可以同时提供 `MASTER_KEY`、`ADMIN_PASSWORD` 和 `PROXY_TOKEN` 环境变量。`MASTER_KEY` 必须是 Base64 编码的 32 字节密钥；缺少其中任意一项都会导致服务拒绝启动。通过环境变量建立实例身份后，Web 初始化入口保持关闭。
