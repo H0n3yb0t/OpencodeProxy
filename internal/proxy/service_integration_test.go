@@ -3,7 +3,6 @@ package proxy
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/local/opencode-keypool/internal/config"
 	"github.com/local/opencode-keypool/internal/cryptox"
+	"github.com/local/opencode-keypool/internal/identity"
 	"github.com/local/opencode-keypool/internal/store"
 )
 
@@ -36,9 +36,9 @@ func TestFailoverAndModelsDuringQuotaCooling(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	db, cipher, service := testService(t, upstream.URL)
-	first := addTestKey(t, db, cipher, "First", "first-key", 1)
-	second := addTestKey(t, db, cipher, "Second", "second-key", 2)
+	db, identityManager, service := testService(t, upstream.URL)
+	first := addTestKey(t, db, identityManager, "First", "first-key", 1)
+	second := addTestKey(t, db, identityManager, "Second", "second-key", 2)
 	if err := db.SetActive(context.Background(), first.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -89,9 +89,9 @@ func TestStreamingFirstErrorFailsOverBeforeClientBytes(t *testing.T) {
 		_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	}))
 	defer upstream.Close()
-	db, cipher, service := testService(t, upstream.URL)
-	first := addTestKey(t, db, cipher, "Stream first", "stream-first", 1)
-	second := addTestKey(t, db, cipher, "Stream second", "stream-second", 2)
+	db, identityManager, service := testService(t, upstream.URL)
+	first := addTestKey(t, db, identityManager, "Stream first", "stream-first", 1)
+	second := addTestKey(t, db, identityManager, "Stream second", "stream-second", 2)
 	if err := db.SetActive(context.Background(), first.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestStreamingFirstErrorFailsOverBeforeClientBytes(t *testing.T) {
 	}
 }
 
-func testService(t *testing.T, upstream string) (*store.Store, *cryptox.Cipher, *Service) {
+func testService(t *testing.T, upstream string) (*store.Store, *identity.Manager, *Service) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -124,18 +124,17 @@ func testService(t *testing.T, upstream string) (*store.Store, *cryptox.Cipher, 
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
-	cipher, err := cryptox.New(key)
+	identityManager, err := identity.Open(filepath.Join(t.TempDir(), "instance.json"), key, "test-admin", "test-token")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Config{UpstreamBaseURL: upstream, RequestTimeout: 10 * time.Second, IdleTimeout: time.Minute, MaxRequestBytes: 1 << 20, MasterKey: key, AdminPassword: "test", BootstrapToken: "test", DatabasePath: filepath.Join(t.TempDir(), "unused.db")}
-	_ = base64.StdEncoding.EncodeToString(key)
-	return db, cipher, NewService(cfg, db, cipher)
+	return db, identityManager, NewService(cfg, db, identityManager)
 }
 
-func addTestKey(t *testing.T, db *store.Store, cipher *cryptox.Cipher, name, secret string, priority int) store.Key {
+func addTestKey(t *testing.T, db *store.Store, identityManager *identity.Manager, name, secret string, priority int) store.Key {
 	t.Helper()
-	encrypted, err := cipher.Encrypt(secret)
+	encrypted, err := identityManager.Encrypt(secret)
 	if err != nil {
 		t.Fatal(err)
 	}

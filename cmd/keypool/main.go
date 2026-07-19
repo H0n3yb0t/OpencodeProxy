@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/local/opencode-keypool/internal/config"
-	"github.com/local/opencode-keypool/internal/cryptox"
 	"github.com/local/opencode-keypool/internal/httpapi"
+	"github.com/local/opencode-keypool/internal/identity"
 	"github.com/local/opencode-keypool/internal/proxy"
 	"github.com/local/opencode-keypool/internal/scheduler"
 	"github.com/local/opencode-keypool/internal/store"
@@ -31,19 +31,19 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
-	cipher, err := cryptox.New(cfg.MasterKey)
+	identityManager, err := identity.Open(cfg.InstancePath, cfg.MasterKey, cfg.AdminPassword, cfg.BootstrapToken)
 	if err != nil {
-		logger.Error("initialize encryption", "error", err)
+		logger.Error("initialize instance identity", "error", err)
 		os.Exit(1)
 	}
-	proxyService := proxy.NewService(cfg, db, cipher)
-	api := httpapi.New(cfg, db, cipher, proxyService)
+	proxyService := proxy.NewService(cfg, db, identityManager)
+	api := httpapi.New(cfg, db, identityManager, proxyService)
 	server := &http.Server{Addr: cfg.ListenAddr, Handler: api.Router(), ReadHeaderTimeout: 15 * time.Second, IdleTimeout: cfg.IdleTimeout}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go scheduler.New(cfg, db, proxyService).Run(ctx)
 	go func() {
-		logger.Info("keypool listening", "address", cfg.ListenAddr)
+		logger.Info("openpool listening", "address", cfg.ListenAddr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("HTTP server stopped", "error", err)
 			stop()

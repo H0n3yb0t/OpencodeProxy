@@ -17,25 +17,25 @@ import (
 	"time"
 
 	"github.com/local/opencode-keypool/internal/config"
-	"github.com/local/opencode-keypool/internal/cryptox"
+	"github.com/local/opencode-keypool/internal/identity"
 	"github.com/local/opencode-keypool/internal/store"
 )
 
 type Service struct {
-	cfg    config.Config
-	store  *store.Store
-	cipher *cryptox.Cipher
-	client *http.Client
-	mu     sync.Mutex
-	probe  sync.Mutex
+	cfg      config.Config
+	store    *store.Store
+	identity *identity.Manager
+	client   *http.Client
+	mu       sync.Mutex
+	probe    sync.Mutex
 }
 
-func NewService(cfg config.Config, db *store.Store, cipher *cryptox.Cipher) *Service {
+func NewService(cfg config.Config, db *store.Store, identityManager *identity.Manager) *Service {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 32
 	transport.IdleConnTimeout = cfg.IdleTimeout
-	return &Service{cfg: cfg, store: db, cipher: cipher, client: &http.Client{Transport: transport, Timeout: cfg.RequestTimeout}}
+	return &Service{cfg: cfg, store: db, identity: identityManager, client: &http.Client{Transport: transport, Timeout: cfg.RequestTimeout}}
 }
 
 type requestMeta struct {
@@ -49,7 +49,7 @@ func (s *Service) HandleInference(protocol string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now().UTC()
 		requestID := newID()
-		w.Header().Set("X-Keypool-Request-Id", requestID)
+		w.Header().Set("X-OpenPool-Request-Id", requestID)
 		body, err := readLimited(r.Body, s.cfg.MaxRequestBytes)
 		if err != nil {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]any{"message": err.Error(), "type": "request_too_large"}})
@@ -73,7 +73,7 @@ func (s *Service) HandleInference(protocol string) http.HandlerFunc {
 		s.mu.Unlock()
 		if err != nil || len(keys) == 0 {
 			s.finishUnavailable(r.Context(), &record, started, "no_available_key")
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"message": "No inference key is currently available", "type": "keypool_unavailable"}})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"message": "No inference key is currently available", "type": "openpool_unavailable"}})
 			return
 		}
 
@@ -84,7 +84,7 @@ func (s *Service) HandleInference(protocol string) http.HandlerFunc {
 		for index, key := range keys {
 			attemptNo := index + 1
 			attemptStart := time.Now().UTC()
-			secret, err := s.cipher.Decrypt(key.EncryptedKey)
+			secret, err := s.identity.Decrypt(key.EncryptedKey)
 			if err != nil {
 				slog.Error("decrypt key", "key_id", key.ID, "error", err)
 				continue
@@ -192,7 +192,7 @@ func (s *Service) HandleInference(protocol string) http.HandlerFunc {
 		if len(lastBody) > 0 {
 			_, _ = w.Write(lastBody)
 		} else {
-			_, _ = w.Write([]byte(`{"error":{"message":"All inference keys are unavailable","type":"keypool_unavailable"}}`))
+			_, _ = w.Write([]byte(`{"error":{"message":"All inference keys are unavailable","type":"openpool_unavailable"}}`))
 		}
 	}
 }
@@ -321,14 +321,14 @@ func (s *Service) HandleModels(w http.ResponseWriter, r *http.Request) {
 	settings, _ := s.store.GetSettings(r.Context())
 	if cached, fetched, err := s.store.ModelCache(r.Context()); err == nil && time.Since(fetched) < time.Duration(settings.ModelsCacheSec)*time.Second {
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Keypool-Models-Cache", "hit")
+		w.Header().Set("X-OpenPool-Models-Cache", "hit")
 		_, _ = w.Write(cached)
 		return
 	}
 	keys, err := s.store.AuthValidKeys(r.Context())
 	if err == nil {
 		for _, key := range keys {
-			secret, decErr := s.cipher.Decrypt(key.EncryptedKey)
+			secret, decErr := s.identity.Decrypt(key.EncryptedKey)
 			if decErr != nil {
 				continue
 			}
@@ -347,7 +347,7 @@ func (s *Service) HandleModels(w http.ResponseWriter, r *http.Request) {
 				_ = s.store.MarkChecked(r.Context(), key.ID, "valid", "reachable", "", "")
 				_ = s.store.SaveModelCache(r.Context(), body, key.ID)
 				copyResponseHeaders(w.Header(), resp.Header)
-				w.Header().Set("X-Keypool-Models-Cache", "miss")
+				w.Header().Set("X-OpenPool-Models-Cache", "miss")
 				w.WriteHeader(resp.StatusCode)
 				_, _ = w.Write(body)
 				return
@@ -361,7 +361,7 @@ func (s *Service) HandleModels(w http.ResponseWriter, r *http.Request) {
 	if cached, _, cacheErr := s.store.ModelCache(r.Context()); cacheErr == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Warning", `110 - "stale model catalog"`)
-		w.Header().Set("X-Keypool-Models-Cache", "stale")
+		w.Header().Set("X-OpenPool-Models-Cache", "stale")
 		_, _ = w.Write(cached)
 		return
 	}
@@ -371,7 +371,7 @@ func (s *Service) HandleModels(w http.ResponseWriter, r *http.Request) {
 func (s *Service) TestKey(ctx context.Context, key store.Key, inference bool) (map[string]any, error) {
 	s.probe.Lock()
 	defer s.probe.Unlock()
-	secret, err := s.cipher.Decrypt(key.EncryptedKey)
+	secret, err := s.identity.Decrypt(key.EncryptedKey)
 	if err != nil {
 		return nil, err
 	}

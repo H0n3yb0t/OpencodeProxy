@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/local/opencode-keypool/internal/config"
 	"github.com/local/opencode-keypool/internal/cryptox"
+	"github.com/local/opencode-keypool/internal/identity"
 	"github.com/local/opencode-keypool/internal/proxy"
 	"github.com/local/opencode-keypool/internal/store"
 )
@@ -22,13 +24,13 @@ import (
 type API struct {
 	cfg      config.Config
 	store    *store.Store
-	cipher   *cryptox.Cipher
+	identity *identity.Manager
 	proxy    *proxy.Service
 	sessions *sessionStore
 }
 
-func New(cfg config.Config, db *store.Store, cipher *cryptox.Cipher, proxyService *proxy.Service) *API {
-	return &API{cfg: cfg, store: db, cipher: cipher, proxy: proxyService, sessions: newSessionStore(cfg.AdminPassword)}
+func New(cfg config.Config, db *store.Store, identityManager *identity.Manager, proxyService *proxy.Service) *API {
+	return &API{cfg: cfg, store: db, identity: identityManager, proxy: proxyService, sessions: newSessionStore()}
 }
 
 func (a *API) Router() http.Handler {
@@ -41,8 +43,10 @@ func (a *API) Router() http.Handler {
 			writeJSON(w, 503, map[string]any{"status": "not_ready"})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"status": "ready"})
+		writeJSON(w, 200, map[string]any{"status": "ready", "initialized": a.identity.Initialized()})
 	})
+	r.Get("/api/setup/status", a.setupStatus)
+	r.Post("/api/setup/initialize", a.setupInitialize)
 	r.Group(func(p chi.Router) {
 		p.Use(a.proxyAuth)
 		p.Get("/v1/models", a.proxy.HandleModels)
@@ -62,6 +66,7 @@ func (a *API) Router() http.Handler {
 		admin.Post("/api/admin/keys/{id}/test", a.testKey)
 		admin.Get("/api/admin/settings", a.getSettings)
 		admin.Put("/api/admin/settings", a.updateSettings)
+		admin.Post("/api/admin/proxy-token/rotate", a.rotateProxyToken)
 		admin.Get("/api/admin/requests", a.requests)
 		admin.Get("/api/admin/dashboard", a.dashboard)
 		admin.Get("/api/admin/stream", a.events)
@@ -84,13 +89,59 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Password string `json:"password"`
 	}
-	if json.NewDecoder(r.Body).Decode(&input) != nil || !a.sessions.checkPassword(input.Password) {
+	if !a.identity.Initialized() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "instance setup is required", "setup_required": true})
+		return
+	}
+	if json.NewDecoder(r.Body).Decode(&input) != nil || !a.identity.VerifyAdmin(input.Password) {
 		writeJSON(w, 401, map[string]any{"error": "invalid password"})
 		return
 	}
 	token := a.sessions.create()
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil, MaxAge: int((12 * time.Hour).Seconds())})
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (a *API) setupStatus(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"initialized": a.identity.Initialized()})
+}
+
+func (a *API) setupInitialize(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	// Hide the bootstrap endpoint completely after an identity exists. This
+	// check is only an early rejection; Manager.Initialize performs the
+	// authoritative check while holding its lock to close concurrent races.
+	if a.identity.Initialized() {
+		http.NotFound(w, r)
+		return
+	}
+	if !sameOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "cross-origin request rejected"})
+		return
+	}
+	secrets, err := a.identity.Initialize()
+	if errors.Is(err, identity.ErrAlreadyInitialized) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	token := a.sessions.create()
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil, MaxAge: int((12 * time.Hour).Seconds())})
+	writeJSON(w, http.StatusCreated, map[string]any{"initialized": true, "secrets": secrets})
+}
+
+func (a *API) rotateProxyToken(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	token, err := a.identity.RotateProxyToken()
+	if err != nil {
+		serverError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"proxy_token": token})
 }
 func (a *API) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
@@ -125,7 +176,7 @@ func (a *API) createKey(w http.ResponseWriter, r *http.Request) {
 	if input.Priority == 0 {
 		input.Priority = 100
 	}
-	encrypted, err := a.cipher.Encrypt(strings.TrimSpace(input.Key))
+	encrypted, err := a.identity.Encrypt(strings.TrimSpace(input.Key))
 	if err != nil {
 		serverError(w, err)
 		return

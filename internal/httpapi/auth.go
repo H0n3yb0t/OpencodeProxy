@@ -2,8 +2,6 @@ package httpapi
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
 	"strings"
@@ -11,21 +9,15 @@ import (
 	"time"
 )
 
-const sessionCookie = "keypool_session"
+const sessionCookie = "openpool_session"
 
 type sessionStore struct {
 	mu       sync.Mutex
 	sessions map[string]time.Time
-	password [32]byte
 }
 
-func newSessionStore(password string) *sessionStore {
-	return &sessionStore{sessions: make(map[string]time.Time), password: sha256.Sum256([]byte(password))}
-}
-
-func (s *sessionStore) checkPassword(password string) bool {
-	got := sha256.Sum256([]byte(password))
-	return subtle.ConstantTimeCompare(got[:], s.password[:]) == 1
+func newSessionStore() *sessionStore {
+	return &sessionStore{sessions: make(map[string]time.Time)}
 }
 
 func (s *sessionStore) create() string {
@@ -57,6 +49,10 @@ func (s *sessionStore) delete(token string) {
 
 func (a *API) adminAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !a.identity.Initialized() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "instance setup is required", "setup_required": true})
+			return
+		}
 		cookie, err := r.Cookie(sessionCookie)
 		if err != nil || !a.sessions.valid(cookie.Value) {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "admin authentication required"})
@@ -71,14 +67,16 @@ func (a *API) adminAuth(next http.Handler) http.Handler {
 }
 
 func (a *API) proxyAuth(next http.Handler) http.Handler {
-	want := sha256.Sum256([]byte(a.cfg.BootstrapToken))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !a.identity.Initialized() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"message": "OpenPool setup is required", "type": "setup_required"}})
+			return
+		}
 		token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		if token == "" {
 			token = r.Header.Get("X-Api-Key")
 		}
-		got := sha256.Sum256([]byte(token))
-		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+		if !a.identity.VerifyProxy(token) {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]any{"message": "Invalid proxy token", "type": "authentication_error"}})
 			return
 		}
