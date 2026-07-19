@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/H0n3yb0t/OpencodeProxy/internal/config"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/cryptox"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/identity"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/proxy"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/local/opencode-keypool/internal/config"
-	"github.com/local/opencode-keypool/internal/cryptox"
-	"github.com/local/opencode-keypool/internal/identity"
-	"github.com/local/opencode-keypool/internal/proxy"
-	"github.com/local/opencode-keypool/internal/store"
 )
 
 type API struct {

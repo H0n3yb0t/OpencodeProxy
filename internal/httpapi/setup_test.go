@@ -9,16 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/local/opencode-keypool/internal/config"
-	"github.com/local/opencode-keypool/internal/identity"
-	"github.com/local/opencode-keypool/internal/proxy"
-	"github.com/local/opencode-keypool/internal/store"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/config"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/identity"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/proxy"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/store"
 )
 
 func TestWebSetupPersistsAndRotatesProxyToken(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Config{
-		DatabasePath:    filepath.Join(dir, "openpool.db"),
+		DatabasePath:    filepath.Join(dir, "opencodeproxy.db"),
 		InstancePath:    filepath.Join(dir, "instance.json"),
 		UpstreamBaseURL: "https://opencode.ai/zen/go/v1",
 		RequestTimeout:  time.Second,

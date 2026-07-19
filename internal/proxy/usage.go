@@ -3,7 +3,7 @@ package proxy
 import (
 	"encoding/json"
 
-	"github.com/local/opencode-keypool/internal/store"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/store"
 )
 
 type usageAccumulator struct {

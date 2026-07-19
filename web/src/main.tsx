@@ -172,7 +172,7 @@ function Setup({ onComplete }: { onComplete: () => void }) {
 
   const exportText = secrets
     ? [
-        "OpenPool initialization credentials",
+        "OpencodeProxy initialization credentials",
         `URL: ${location.origin}`,
         `Admin password: ${secrets.admin_password}`,
         `Proxy token: ${secrets.proxy_token}`,
@@ -188,7 +188,7 @@ function Setup({ onComplete }: { onComplete: () => void }) {
     );
     const link = document.createElement("a");
     link.href = url;
-    link.download = "openpool-credentials.txt";
+    link.download = "opencodeproxy-credentials.txt";
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -199,10 +199,9 @@ function Setup({ onComplete }: { onComplete: () => void }) {
         <section className="login-card setup-card">
           <div className="brand-mark">O</div>
           <p className="eyebrow">FIRST RUN SETUP</p>
-          <h1>初始化 OpenPool</h1>
+          <h1>初始化 OpencodeProxy</h1>
           <p className="muted setup-copy">
-            不需要准备环境变量。OpenPool 会自动生成并保存加密主密钥、管理员密码和代理
-            token。
+            系统将生成并保存加密主密钥、管理员密码和代理 token。
           </p>
           <div className="setup-notice">
             尚未初始化的服务由第一个访问者取得管理权。请只在可信网络完成此步骤。
@@ -287,7 +286,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
       <section className="login-card">
         <div className="brand-mark">O</div>
         <p className="eyebrow">OPENCODE GO CONTROL PLANE</p>
-        <h1>OpenPool</h1>
+        <h1>OpencodeProxy</h1>
         <p className="muted">故障转移、额度恢复与缓存效率，一处掌握。</p>
         <form onSubmit={submit}>
           <label>
@@ -353,7 +352,7 @@ function App() {
         <div className="brand">
           <div className="brand-mark small">O</div>
           <div>
-            <strong>OpenPool</strong>
+            <strong>OpencodeProxy</strong>
             <span>OpenCode Go</span>
           </div>
         </div>

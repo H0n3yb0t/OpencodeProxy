@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/local/opencode-keypool/internal/config"
-	"github.com/local/opencode-keypool/internal/cryptox"
-	"github.com/local/opencode-keypool/internal/identity"
-	"github.com/local/opencode-keypool/internal/store"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/config"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/cryptox"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/identity"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/store"
 )
 
 func TestFailoverAndModelsDuringQuotaCooling(t *testing.T) {

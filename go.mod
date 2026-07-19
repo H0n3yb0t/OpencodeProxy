@@ -1,4 +1,4 @@
-module github.com/local/opencode-keypool
+module github.com/H0n3yb0t/OpencodeProxy
 
 go 1.25.0
 

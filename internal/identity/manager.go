@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/local/opencode-keypool/internal/cryptox"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/cryptox"
 	"golang.org/x/crypto/argon2"
 )
 

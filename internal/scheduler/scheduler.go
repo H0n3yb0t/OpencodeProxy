@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/local/opencode-keypool/internal/config"
-	"github.com/local/opencode-keypool/internal/proxy"
-	"github.com/local/opencode-keypool/internal/store"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/config"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/proxy"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/store"
 )
 
 type Scheduler struct {

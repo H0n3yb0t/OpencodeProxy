@@ -4,8 +4,7 @@
 *.db
 *.db-shm
 *.db-wal
-keypool.exe
-openpool.exe
+opencodeproxy.exe
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo

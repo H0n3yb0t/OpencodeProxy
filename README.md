@@ -1,6 +1,6 @@
-# OpenPool
+# OpencodeProxy
 
-面向个人部署的 OpenCode Go 主备故障转移代理。OpenPool 固定使用当前活动 key；仅在确认额度耗尽或凭证失效，且请求尚未向客户端输出内容时切换到下一枚独立 key。
+面向个人部署的 OpenCode Go 主备故障转移代理。OpencodeProxy 固定使用当前活动 key；仅在确认额度耗尽或凭证失效，且请求尚未向客户端输出内容时切换到下一枚独立 key。
 
 ## 功能
 
@@ -19,7 +19,7 @@
 docker compose up -d --build
 ```
 
-打开 `http://服务器地址:8080`，在首次运行页面点击“一键初始化”。OpenPool 会自动生成：
+打开 `http://服务器地址:8080`，在首次运行页面点击“一键初始化”。OpencodeProxy 会自动生成：
 
 - 管理员密码
 - 客户端代理 token
@@ -33,7 +33,7 @@ docker compose up -d --build
 
 初始化是原子单次操作。完成后初始化接口关闭并返回 `404 Not Found`，已生成的凭据无法通过该接口再次读取或重置。代理 token 只能由已登录管理员在设置页轮换。
 
-配置、加密主密钥和数据库保存在 Docker 数据卷 `openpool-data`。备份和迁移时应备份整个数据卷，并单独安全保存恢复密钥。
+配置、加密主密钥和数据库保存在 Docker 数据卷 `opencodeproxy-data`。备份和迁移时应备份整个数据卷，并单独安全保存恢复密钥。
 
 ### 无人值守初始化
 
@@ -86,8 +86,8 @@ npm install
 npm run build
 cd ..
 
-$env:DATABASE_PATH = ".tmp/openpool.db"
-go run ./cmd/keypool
+$env:DATABASE_PATH = ".tmp/opencodeproxy.db"
+go run ./cmd/opencodeproxy
 ```
 
 打开 `http://127.0.0.1:8080` 完成 Web 初始化。

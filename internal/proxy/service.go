@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/local/opencode-keypool/internal/config"
-	"github.com/local/opencode-keypool/internal/identity"
-	"github.com/local/opencode-keypool/internal/store"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/config"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/identity"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/store"
 )
 
 type Service struct {
@@ -49,7 +49,7 @@ func (s *Service) HandleInference(protocol string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now().UTC()
 		requestID := newID()
-		w.Header().Set("X-OpenPool-Request-Id", requestID)
+		w.Header().Set("X-OpencodeProxy-Request-Id", requestID)
 		body, err := readLimited(r.Body, s.cfg.MaxRequestBytes)
 		if err != nil {
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": map[string]any{"message": err.Error(), "type": "request_too_large"}})
@@ -73,7 +73,7 @@ func (s *Service) HandleInference(protocol string) http.HandlerFunc {
 		s.mu.Unlock()
 		if err != nil || len(keys) == 0 {
 			s.finishUnavailable(r.Context(), &record, started, "no_available_key")
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"message": "No inference key is currently available", "type": "openpool_unavailable"}})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"message": "No inference key is currently available", "type": "opencodeproxy_unavailable"}})
 			return
 		}
 
@@ -192,7 +192,7 @@ func (s *Service) HandleInference(protocol string) http.HandlerFunc {
 		if len(lastBody) > 0 {
 			_, _ = w.Write(lastBody)
 		} else {
-			_, _ = w.Write([]byte(`{"error":{"message":"All inference keys are unavailable","type":"openpool_unavailable"}}`))
+			_, _ = w.Write([]byte(`{"error":{"message":"All inference keys are unavailable","type":"opencodeproxy_unavailable"}}`))
 		}
 	}
 }
@@ -321,7 +321,7 @@ func (s *Service) HandleModels(w http.ResponseWriter, r *http.Request) {
 	settings, _ := s.store.GetSettings(r.Context())
 	if cached, fetched, err := s.store.ModelCache(r.Context()); err == nil && time.Since(fetched) < time.Duration(settings.ModelsCacheSec)*time.Second {
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-OpenPool-Models-Cache", "hit")
+		w.Header().Set("X-OpencodeProxy-Models-Cache", "hit")
 		_, _ = w.Write(cached)
 		return
 	}
@@ -347,7 +347,7 @@ func (s *Service) HandleModels(w http.ResponseWriter, r *http.Request) {
 				_ = s.store.MarkChecked(r.Context(), key.ID, "valid", "reachable", "", "")
 				_ = s.store.SaveModelCache(r.Context(), body, key.ID)
 				copyResponseHeaders(w.Header(), resp.Header)
-				w.Header().Set("X-OpenPool-Models-Cache", "miss")
+				w.Header().Set("X-OpencodeProxy-Models-Cache", "miss")
 				w.WriteHeader(resp.StatusCode)
 				_, _ = w.Write(body)
 				return
@@ -361,7 +361,7 @@ func (s *Service) HandleModels(w http.ResponseWriter, r *http.Request) {
 	if cached, _, cacheErr := s.store.ModelCache(r.Context()); cacheErr == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Warning", `110 - "stale model catalog"`)
-		w.Header().Set("X-OpenPool-Models-Cache", "stale")
+		w.Header().Set("X-OpencodeProxy-Models-Cache", "stale")
 		_, _ = w.Write(cached)
 		return
 	}

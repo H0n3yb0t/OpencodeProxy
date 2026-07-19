@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/local/opencode-keypool/internal/config"
-	"github.com/local/opencode-keypool/internal/httpapi"
-	"github.com/local/opencode-keypool/internal/identity"
-	"github.com/local/opencode-keypool/internal/proxy"
-	"github.com/local/opencode-keypool/internal/scheduler"
-	"github.com/local/opencode-keypool/internal/store"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/config"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/httpapi"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/identity"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/proxy"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/scheduler"
+	"github.com/H0n3yb0t/OpencodeProxy/internal/store"
 )
 
 func main() {
@@ -43,7 +43,7 @@ func main() {
 	defer stop()
 	go scheduler.New(cfg, db, proxyService).Run(ctx)
 	go func() {
-		logger.Info("openpool listening", "address", cfg.ListenAddr)
+		logger.Info("opencodeproxy listening", "address", cfg.ListenAddr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("HTTP server stopped", "error", err)
 			stop()

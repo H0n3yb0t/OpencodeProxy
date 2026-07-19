@@ -29,7 +29,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		ListenAddr:      env("LISTEN_ADDR", "0.0.0.0:8080"),
-		DatabasePath:    env("DATABASE_PATH", "data/openpool.db"),
+		DatabasePath:    env("DATABASE_PATH", "data/opencodeproxy.db"),
 		AdminPassword:   os.Getenv("ADMIN_PASSWORD"),
 		BootstrapToken:  os.Getenv("PROXY_TOKEN"),
 		UpstreamBaseURL: env("UPSTREAM_BASE_URL", "https://opencode.ai/zen/go/v1"),

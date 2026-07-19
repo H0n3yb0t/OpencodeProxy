@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const sessionCookie = "openpool_session"
+const sessionCookie = "opencodeproxy_session"
 
 type sessionStore struct {
 	mu       sync.Mutex
@@ -69,7 +69,7 @@ func (a *API) adminAuth(next http.Handler) http.Handler {
 func (a *API) proxyAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.identity.Initialized() {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"message": "OpenPool setup is required", "type": "setup_required"}})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"message": "OpencodeProxy setup is required", "type": "setup_required"}})
 			return
 		}
 		token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
