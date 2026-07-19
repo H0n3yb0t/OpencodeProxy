@@ -1,17 +1,19 @@
-FROM node:22-alpine AS web-build
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web-build
 WORKDIR /src/web
 COPY web/package*.json ./
 RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.26-alpine AS go-build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS go-build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/opencodeproxy ./cmd/opencodeproxy
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/opencodeproxy ./cmd/opencodeproxy
 
 FROM alpine:3.22
 LABEL org.opencontainers.image.title="OpencodeProxy" \
