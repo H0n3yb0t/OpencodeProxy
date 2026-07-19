@@ -40,6 +40,12 @@ docker compose up -d --build
 
 自动化部署可以同时提供 `MASTER_KEY`、`ADMIN_PASSWORD` 和 `PROXY_TOKEN` 环境变量。`MASTER_KEY` 必须是 Base64 编码的 32 字节密钥；缺少其中任意一项都会导致服务拒绝启动。通过环境变量建立实例身份后，Web 初始化入口保持关闭。
 
+### Docker 镜像发布
+
+GitHub Actions 工作流会将 `master` 分支的每次推送构建为 `h0n3yb0t/opencodeproxy:latest`，并同时发布对应的 `sha-*` 标签。推送 `v1.2.3` 格式的 Git tag 时，还会发布 `v1.2.3`、`1.2.3` 和 `1.2` 标签。镜像包含 `linux/amd64` 与 `linux/arm64` 两个平台。
+
+仓库需要配置 Actions secret `DOCKERHUB_TOKEN`，其值为具备 Docker Hub 仓库读写权限的 Personal Access Token。发布任务也可以从 GitHub Actions 页面手动触发。
+
 ## 客户端接入
 
 OpenAI-compatible：
