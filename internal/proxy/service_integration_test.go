@@ -113,6 +113,42 @@ func TestStreamingFirstErrorFailsOverBeforeClientBytes(t *testing.T) {
 	}
 }
 
+func TestInsufficientBalanceCoolsKeyAndFailsOver(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secret := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		w.Header().Set("Content-Type", "application/json")
+		if secret == "empty-balance-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `{"kind":"request","message":"error | CreditsError | Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_redacted/billing","ok":false,"stage":"inference","status":401}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"OK"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	defer upstream.Close()
+
+	db, identityManager, service := testService(t, upstream.URL)
+	first := addTestKey(t, db, identityManager, "Empty balance", "empty-balance-key", 1)
+	second := addTestKey(t, db, identityManager, "Funded", "funded-key", 2)
+	if err := db.SetActive(context.Background(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"mimo-v2.5","messages":[{"role":"user","content":"OK"}]}`))
+	response := httptest.NewRecorder()
+	service.HandleInference("openai")(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"OK"`) {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
+	}
+	firstAfter, _ := db.KeyByID(context.Background(), first.ID)
+	secondAfter, _ := db.KeyByID(context.Background(), second.ID)
+	if firstAfter.QuotaState != "cooling" || firstAfter.QuotaWindow != "balance" || firstAfter.CoolingUntil == nil {
+		t.Fatalf("empty-balance key state=%#v", firstAfter)
+	}
+	if secondAfter.PoolRole != "active" {
+		t.Fatalf("funded key was not promoted: %#v", secondAfter)
+	}
+}
+
 func testService(t *testing.T, upstream string) (*store.Store, *identity.Manager, *Service) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))

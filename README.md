@@ -6,7 +6,7 @@
 
 - 同时代理 OpenAI-compatible `POST /v1/chat/completions` 与 Anthropic-compatible `POST /v1/messages`
 - `GET /v1/models` 使用独立控制面状态和缓存，不受推理 quota 冷却影响
-- 识别 5 小时、周、月额度错误并显示恢复倒计时
+- 识别 5 小时、周、月额度及账户余额不足错误，并显示恢复或再次探测倒计时
 - 可全局或逐 key 关闭自动恢复探测
 - 支持每行一个 key 的批量导入、去重和导入结果汇总
 - AES-GCM 加密保存上游 key，UI 只显示指纹

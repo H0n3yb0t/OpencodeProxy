@@ -189,6 +189,22 @@ const countdown = (value?: string) => {
     .filter(Boolean)
     .join(" ");
 };
+const quotaWindowLabel = (value?: string) => {
+  switch (value) {
+    case "balance":
+      return "余额不足";
+    case "5h":
+      return "5 小时额度";
+    case "weekly":
+      return "周额度";
+    case "monthly":
+      return "月额度";
+    case "weekly_or_monthly":
+      return "周/月额度";
+    default:
+      return value ? `${value}额度` : "额度";
+  }
+};
 
 function Setup({ onComplete }: { onComplete: () => void }) {
   const [secrets, setSecrets] = useState<SetupSecrets | null>(null);
@@ -750,9 +766,12 @@ function Keys({ refresh }: { refresh: number }) {
             </div>
             {key.quota_state === "cooling" && (
               <div className="cooldown">
-                <span>{key.quota_window || "额度"}窗口冷却中</span>
+                <span>{quotaWindowLabel(key.quota_window)}冷却中</span>
                 <strong>{countdown(key.cooling_until)}</strong>
-                <small>预计 {formatDate(key.cooling_until)} 恢复</small>
+                <small>
+                  {key.quota_window === "balance" ? "最早重试" : "预计恢复"}{" "}
+                  {formatDate(key.cooling_until)}
+                </small>
               </div>
             )}
             {key.last_error && <p className="key-error">{key.last_error}</p>}

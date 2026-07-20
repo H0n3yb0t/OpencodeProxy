@@ -30,6 +30,7 @@ type Classification struct {
 
 var (
 	quotaPattern   = regexp.MustCompile(`(?i)(usage limit reached|limit exhausted|quota exceeded|subscription quota|weekly/monthly limit exhausted|weekly usage limit|monthly usage limit|5\s*hour usage limit)`)
+	balancePattern = regexp.MustCompile(`(?i)(insufficient\s+(?:account\s+)?balance|insufficient\s+credits?|not\s+enough\s+credits?|credits?error.*(?:balance|billing)|manage\s+your\s+billing)`)
 	authPattern    = regexp.MustCompile(`(?i)(invalid|expired|revoked|unauthorized|authentication|api[ _-]?key|credential)`)
 	ratePattern    = regexp.MustCompile(`(?i)(rate[ _-]?limit|too many requests|concurrenc(?:y|ies)|overloaded|temporarily unavailable)`)
 	resetInPattern = regexp.MustCompile(`(?i)(?:it\s+will\s+reset\s+in|resets?\s+in|retry\s+in)\s*[:：]?\s*([^\n.;]+)`)
@@ -40,9 +41,11 @@ func Classify(status int, headers http.Header, body []byte, now time.Time) Class
 	message := extractMessage(body)
 	lower := strings.ToLower(message)
 	result := Classification{Message: message}
-	if quotaPattern.MatchString(message) {
+	if quotaPattern.MatchString(message) || balancePattern.MatchString(message) {
 		result.Kind = ErrorQuota
 		switch {
+		case balancePattern.MatchString(message):
+			result.Window = "balance"
 		case strings.Contains(lower, "5 hour") || strings.Contains(lower, "5-hour"):
 			result.Window = "5h"
 		case strings.Contains(lower, "week") && strings.Contains(lower, "month"):

@@ -424,7 +424,11 @@ func (s *Service) recordKeyFailure(ctx context.Context, id int64, c Classificati
 	if c.Kind == ErrorQuota {
 		reset := c.ResetAt
 		if reset == nil {
-			fallback := now.Add(15 * time.Minute)
+			probeInterval := 15 * time.Minute
+			if settings, err := s.store.GetSettings(ctx); err == nil && settings.ProbeIntervalSec >= 60 {
+				probeInterval = time.Duration(settings.ProbeIntervalSec) * time.Second
+			}
+			fallback := now.Add(probeInterval)
 			reset = &fallback
 		}
 		return s.store.MarkQuota(ctx, id, c.Window, reset, c.Message)

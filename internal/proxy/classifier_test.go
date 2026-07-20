@@ -25,6 +25,13 @@ func TestClassifyDoesNotTreatEvery401AsAuth(t *testing.T) {
 	}
 }
 
+func TestClassifyInsufficientBalanceAsRecoverableQuota(t *testing.T) {
+	c := Classify(401, http.Header{}, []byte(`{"kind":"request","message":"error | CreditsError | Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_redacted/billing","ok":false}`), time.Now())
+	if c.Kind != ErrorQuota || c.Window != "balance" || c.ResetAt != nil {
+		t.Fatalf("unexpected classification: %#v", c)
+	}
+}
+
 func TestParseAnthropicUsage(t *testing.T) {
 	a := newUsageAccumulator("anthropic")
 	a.ObserveJSON([]byte(`{"usage":{"input_tokens":100,"cache_read_input_tokens":80,"cache_creation_input_tokens":20,"output_tokens":12}}`))
